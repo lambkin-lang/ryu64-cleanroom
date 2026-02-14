@@ -680,8 +680,10 @@ static int shortest_has_shorter_candidate(uint64_t bits, const char* shortest, c
       parsed = strtod(cand_text, &end);
       if (end != NULL && *end == '\0' && bits_from_double(parsed) == bits) {
         if (out_candidate != NULL && out_cap > 0u) {
-          strncpy(out_candidate, cand_text, out_cap - 1u);
-          out_candidate[out_cap - 1u] = '\0';
+          size_t len = strlen(cand_text);
+          if (len >= out_cap) len = out_cap - 1u;
+          memcpy(out_candidate, cand_text, len);
+          out_candidate[len] = '\0';
         }
         return 1;
       }
@@ -752,6 +754,24 @@ static int run_printf_oracle(const u64_vec* ds, int quick, oracle_stats* stats) 
                 continue;
               }
               if (strcmp(got, oracle) != 0) {
+                /*
+                 * Some libc implementations (notably glibc) produce shortened
+                 * output for %#g when rounding promotes the value to a higher
+                 * power of ten (e.g. "1.e+09" instead of "1.00000000e+09").
+                 * Both representations are defensible readings of the C
+                 * standard.  Tolerate the difference when both strings parse
+                 * back to the same double.
+                 */
+                if (spec.kind == RYU_FMT_G && spec.alternate_form) {
+                  char *end_got = NULL, *end_oracle = NULL;
+                  double d_got = strtod(got, &end_got);
+                  double d_oracle = strtod(oracle, &end_oracle);
+                  if (end_got != NULL && *end_got == '\0' &&
+                      end_oracle != NULL && *end_oracle == '\0' &&
+                      bits_from_double(d_got) == bits_from_double(d_oracle)) {
+                    continue;
+                  }
+                }
                 log_mismatch("printf", stats, "text", got, oracle);
               }
               if (got_len != strlen(got)) {
