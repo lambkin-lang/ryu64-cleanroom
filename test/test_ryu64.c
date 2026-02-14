@@ -24,6 +24,66 @@
 
 #include "ryu64.h"
 
+#if defined(RYU_NO_LIBC_TEST)
+#include <stdint.h>
+#include <string.h>
+
+static uint64_t bits_from_double(double x) {
+  uint64_t b;
+  memcpy(&b, &x, sizeof(b));
+  return b;
+}
+
+static int str_eq(const char* a, const char* b) {
+  size_t i = 0u;
+  while (a[i] != '\0' || b[i] != '\0') {
+    if (a[i] != b[i]) {
+      return 0;
+    }
+    i += 1u;
+  }
+  return 1;
+}
+
+int main(void) {
+  char out[128];
+  size_t out_len = 0u;
+  ryu64_parse_result p;
+  ryu_printf_spec spec;
+
+  if (ryu64_to_shortest(out, sizeof(out), 1.5, &out_len) != RYU_OK || !str_eq(out, "1.5")) {
+    return 1;
+  }
+  if (ryu64_to_9sig(out, sizeof(out), 1.23456789, &out_len) != RYU_OK || out_len == 0u) {
+    return 2;
+  }
+
+  p = ryu64_from_decimal_tiny("1.5", 3u);
+  if ((p.status != RYU_PARSE_OK && p.status != RYU_PARSE_INEXACT) ||
+      p.parsed_len != 3u ||
+      bits_from_double(p.value) != bits_from_double(1.5)) {
+    return 3;
+  }
+
+  p = ryu64_from_decimal_full("1e20", 4u);
+  if (p.parsed_len == 0u || p.status == RYU_PARSE_INVALID) {
+    return 4;
+  }
+
+  spec.kind = RYU_FMT_G;
+  spec.precision = 6;
+  spec.uppercase = 0;
+  spec.alternate_form = 0;
+  spec.always_sign = 0;
+  spec.space_sign = 0;
+  if (ryu64_to_printf(out, sizeof(out), 1.0, &spec, &out_len) != RYU_OK || out_len == 0u) {
+    return 5;
+  }
+  return 0;
+}
+
+#else
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -652,6 +712,16 @@ static int run_parse_full_diff_vs_strtod(unsigned iters) {
 
 static int run_parse_full_boundary_vs_strtod(void) {
   static const char* cases[] = {
+      "1e20",
+      "-1e20",
+      "1e38",
+      "-1e38",
+      "9.999999999999999999e38",
+      "-9.999999999999999999e38",
+      "1234567890123456789e24",
+      "-1234567890123456789e24",
+      "9999999999999999999e38",
+      "-9999999999999999999e38",
       "2.2250738585072014e-308",
       "2.2250738585072013e-308",
       "1.7976931348623157e308",
@@ -746,3 +816,5 @@ int main(void) {
   printf("all tests passed\n");
   return 0;
 }
+
+#endif

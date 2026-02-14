@@ -1,67 +1,121 @@
 # IMPLEMENTATION_LOG
 
-This document tracks clean-room provenance for `ryu64-cleanroom`.
+This document tracks clean-room provenance and implementation checkpoints for `ryu64-cleanroom`.
 
-## Rules Followed
+## Clean-Room Commitments
 
-- Only paper/spec references listed below were consulted before implementation.
-- No upstream Ryu implementation code was consulted during implementation.
-- No libc dtoa/printf float-format source code was consulted during implementation.
+- Only paper/spec references listed below are used for pre-freeze implementation.
+- No third-party implementation code is used as an input for library design or coding.
+- Differential oracles (`snprintf`, `strtod`, `scanf`) are used only in tests.
+- Any post-freeze discrepancy resolution is done by returning to paper/spec reasoning.
+
+See `/docs/CLEANROOM_PROTOCOL.md` for the operational process.
 
 ## Consulted Documents (Pre-Implementation)
 
-1. Ulf Adams, "Ryu: fast float-to-string conversion" (PLDI 2018).
-   - DOI: https://doi.org/10.1145/3192366.3192369
-   - Purpose: shortest/round-trip interval model and correctness goals.
+1. Ulf Adams, "Ryū: fast float-to-string conversion" (PLDI 2018).
+- DOI: https://doi.org/10.1145/3192366.3192369
+- Used for: shortest conversion invariants, interval reasoning, nearest-even goals.
+- Sections used: algorithm overview and correctness discussion for shortest round-trip conversion.
 
-2. "Ryu revisited: printf floating point conversion".
-   - ACM page: https://dl.acm.org/doi/10.1145/3360595
-   - Purpose: printf-family behavior goals and rounding/format family mapping.
+2. "Ryū revisited: printf floating point conversion".
+- ACM page: https://dl.acm.org/doi/10.1145/3360595
+- Used for: `%f/%e/%g` conversion family behavior and rounding model.
 
 3. POSIX printf utility description.
-   - URL: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/printf.html
-   - Purpose: `%e/%f/%g` behavior semantics and defaults.
+- URL: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/printf.html
+- Used for: formatting behavior targets and default precision expectations.
 
 4. C formatting reference (`fprintf`).
-   - URL: https://en.cppreference.com/w/c/io/fprintf.html
-   - Purpose: precision defaults, `%g` style switching, and flag semantics checklist.
+- URL: https://en.cppreference.com/w/c/io/fprintf.html
+- Used for: `%g` switching semantics, precision defaults, and flag behavior checklist.
 
 5. `snprintf(3)` behavior summary.
-   - URL: https://man.archlinux.org/man/snprintf.3.en
-   - Purpose: implementation compatibility checklist for tests.
+- URL: https://man.archlinux.org/man/snprintf.3.en
+- Used for: compatibility checklist for test oracles.
 
-## Decimal -> Binary64 Parser
+## Decimal -> Binary64 Parser References
 
-Allowed/spec references consulted for parser design:
+1. Daniel Lemire et al., "Number Parsing at a Gigabyte per Second".
+- arXiv: https://arxiv.org/abs/2101.11408
+- Used for: fast decimal parsing strategy concepts, fixed-width arithmetic fast-path framing, and fallback design constraints.
+- Sections used: fast-path structure and correctness-oriented discussion around ambiguous cases requiring fallback.
 
-1. Daniel Lemire et al., "Number Parsing at a Gigabyte per Second"
-   - arXiv: https://arxiv.org/abs/2101.11408
-   - Purpose: fast decimal-to-binary algorithm family reference and rounding-oriented
-     design constraints for fixed-width arithmetic fast paths.
+2. IEEE-754 binary64 representation references.
+- Used for: sign/exponent/fraction layout, exponent bias, normal/subnormal boundaries, and round-to-nearest-ties-to-even target behavior.
 
-2. IEEE 754 binary64 layout references.
-   - C floating-point representation notes and binary64 field conventions.
-   - Purpose: sign/exponent/fraction packing behavior and nearest-even rounding targets.
+3. C/POSIX `strtod`-style grammar references.
+- Used for: lexical grammar target (`sign`, decimal form, exponent form, `inf`, `nan` token handling), and end-pointer style consumption behavior.
 
-3. C/POSIX syntax references for `strtod`-style input behavior.
-   - POSIX/C descriptions of decimal floating input grammar (`sign`, decimal, exponent,
-     `inf`, `nan`) used as behavior targets for parsing.
+## Prohibited Inputs Confirmed (Pre-Freeze)
 
-Parser clean-room statement:
+The following were not used before implementation:
 
-- No existing parser implementation code (libc/fast_float/dtoa/musl/glibc/bionic,
-  PostgreSQL, language runtimes, or code snippets/tables) was read before writing
-  `ryu64_parse_*` modules.
+- Any upstream Ryū implementation code or forks.
+- libc parsing/formatting sources (musl/glibc/bionic/Apple libc dtoa/strtod internals).
+- fast_float source code and related parser implementations.
+- language-runtime parser implementations (V8, Go, Rust std/crates, etc.).
+- blog/gist snippets containing parser/formatter code or copied constant tables.
 
-Implementation note:
+## Implementation Record
 
-- `ryu64_from_decimal_full` uses a clean-room bigint-backed rational rounding path when
-  `RYU64_ENABLE_PARSE_BIGINT` is defined; otherwise it falls back to tiny-parser coverage.
-- Full parser includes a bounded fast path delegation to the tiny parser for common numeric
-  inputs, then uses bigint conversion for out-of-bound numerics.
+### Formatting modules (`/src/ryu64_shortest.c`, `/src/ryu64_9sig.c`, `/src/ryu64_printf.c`)
 
-## Notes
+- Implemented directly from paper/spec behavior targets.
+- No imported code structure from existing Ryū repositories.
+- Oracle validation uses libc behavior only in test binaries.
 
-- Post-freeze differential comparison against external Ryu implementations is allowed,
-  but must not be used as a source for code structure or direct fixes.
-- When discrepancies are found, fixes must be derived from paper/spec reasoning.
+### Parsing modules (`/src/ryu64_parse_tiny.c`, `/src/ryu64_parse_full.c`)
+
+- Tiny parser:
+- bounded contract (`<=19` significant digits, effective exponent bounded),
+- no heap allocation, no libc parse dependency.
+
+- Full parser:
+- bigint-backed rational conversion path when `RYU64_ENABLE_PARSE_BIGINT` is enabled,
+- fixed-width fast path for non-truncated significands (`<=19` digits) in exponent range `[-38, 38]`,
+- positive exponent fixed-width path uses local 192-bit integer arithmetic + nearest-even rounding,
+- negative exponent fixed-width path uses ratio arithmetic with bounded `10^k` denominators in `uint128`,
+- falls back to bigint conversion for wider inputs.
+
+### Parse table provenance (`/src/ryu64_parse_tables.c`)
+
+- `10^k` tables are committed as static constants.
+- Reproducibility tool added: `/tools/gen_pow10_u128.c`.
+- Generation method: local arithmetic progression (`10^0` then repeated `*10`) only.
+- No external table dumps were imported.
+- Verification command used during implementation:
+  - `./build/gen_pow10_u128` output compared to the committed table text (`TABLE_MATCH`).
+
+## Test/Validation Record
+
+### Libc-free compile checks
+
+- `make wasm-tiny`
+- `make nolibc-check-speed`
+- `make nolibc-check-size`
+
+These verify non-oracle sources compile in freestanding/no-libc configurations.
+
+### Native tests and oracles
+
+- `make test`
+- Includes deterministic unit tests and differential checks vs libc behavior.
+
+- `make oracle-test` / `make benchmark-speed` / `make benchmark-size`
+- Oracle program: `/test/oracle_stdio.c`
+- Uses `printf`/`scanf` as behavior oracles for:
+- shortest/9sig output acceptance and roundtrip behavior,
+- `%f/%e/%g` formatting matrix checks,
+- tiny/full scanning comparisons,
+- deterministic stress sets:
+- nextafter neighbors around `2^e` (`e=-1074..1023`),
+- nextafter neighbors around `10^k` (`k=-323..308`),
+- crafted literal and bit-pattern buckets,
+- randomized bounded and wide fuzzing.
+
+## Freeze and Post-Freeze Policy
+
+- Freeze means implementation logic is paused; only then additional external validation references may be consulted.
+- Post-freeze comparisons against external implementations are allowed for differential checks only.
+- Any code fix must still be re-derived from paper/spec constraints.

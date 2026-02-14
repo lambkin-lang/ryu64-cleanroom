@@ -1,0 +1,63 @@
+# Clean-Room Protocol (ryu64-cleanroom)
+
+This file defines the process used to keep this repository clean-room.
+
+## Scope
+
+- Applies to all library implementation files under `/src` and `/include`.
+- Applies to tests under `/test` while implementation is in progress.
+- Applies to generated constants/tables committed into source.
+
+## Allowed Inputs Before Freeze
+
+- Paper/spec documents only:
+  - Ulf Adams, PLDI 2018 Ryū paper (shortest conversion algorithm spec).
+  - Ryū Printf paper (printf-family algorithm spec).
+  - POSIX/C references for printf/strtod-style behavior.
+  - Daniel Lemire et al. decimal parsing paper (algorithm family/spec reasoning only).
+  - IEEE-754 binary64 format references.
+- Local reasoning and original derivations.
+- Locally written helper tools to generate/check constants.
+
+## Forbidden Inputs Before Freeze
+
+- Any existing Ryū codebase or fork.
+- Any existing decimal parser codebase (libc parsers, language runtimes, fast_float, dtoa variants).
+- Blog/gist snippets containing algorithm code or copied table dumps.
+
+## Process
+
+1. Specification phase
+- Record every consulted document and purpose in `/docs/IMPLEMENTATION_LOG.md`.
+- Restrict notes to behavior goals, invariants, and derivation targets.
+
+2. Design phase
+- Produce internal design from first principles.
+- Derive rounding logic from IEEE-754 + paper statements, not from source code shape.
+
+3. Implementation phase
+- Write original C code directly in this repository.
+- Keep table generation deterministic and reproducible with local tools.
+- Avoid copy/paste of code structure from external implementations.
+
+4. Freeze phase
+- Stop implementation edits.
+- Capture a freeze commit ID in `/docs/IMPLEMENTATION_LOG.md`.
+
+5. Validation phase (after freeze)
+- Differentially compare behavior against system `snprintf`/`strtod` or other oracles in tests only.
+- If mismatches appear, fix by returning to papers/specs and independent derivation.
+
+## Table Provenance Rules
+
+- Parsing powers-of-ten tables are generated/checked from arithmetic progression (`10^k`) by local tools only.
+- Committed constants must be reproducible from `/tools/gen_pow10_u128.c`.
+- No external table dumps are imported.
+
+## Enforcement Checklist (Per Change)
+
+- `docs/IMPLEMENTATION_LOG.md` updated with consulted references and purpose.
+- New `.c/.h` files include MIT license header.
+- No dependency on libc formatting/parsing inside library code paths.
+- Tiny/no-libc build compiles (`make wasm-tiny`, `make nolibc-check-speed`, `make nolibc-check-size`).
+- Oracle/differential tests isolated to test binaries.

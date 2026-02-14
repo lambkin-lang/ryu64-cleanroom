@@ -108,8 +108,11 @@ ryu_status ryu64_to_printf(
 ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
 
 /*
- * Full parser entry point (libc-free). Current implementation provides a tiny
- * parser fallback and reports RYU_PARSE_UNSUPPORTED for wider numeric ranges.
+ * Full parser entry point (libc-free).
+ * - When built with RYU64_ENABLE_PARSE_BIGINT, supports wide decimal ranges
+ *   using bigint-backed conversion.
+ * - Without that macro, falls back to tiny parser coverage and may return
+ *   RYU_PARSE_UNSUPPORTED for wider ranges.
  */
 ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n);
 

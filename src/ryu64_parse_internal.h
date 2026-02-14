@@ -34,6 +34,8 @@
 #define RYU_PARSE_TINY_MAX_SIG_DIGITS 19
 #define RYU_PARSE_TINY_MIN_EXP10 (-19)
 #define RYU_PARSE_TINY_MAX_EXP10 19
+#define RYU_PARSE_FAST_MAX_NEG_EXP10 38
+#define RYU_PARSE_FAST_MAX_POS_EXP10 38
 
 typedef struct {
   uint64_t hi;
@@ -41,6 +43,7 @@ typedef struct {
 } ryu_u128;
 
 extern const uint64_t ryu64_pow10_u64[20];
+extern const ryu_u128 ryu64_pow10_u128[39];
 
 static inline ryu_u128 ryu_u128_from_u64(uint64_t x) {
   ryu_u128 v;

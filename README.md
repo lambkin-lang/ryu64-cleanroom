@@ -36,6 +36,7 @@ Parser tier contract:
 - Tiny parser returns `RYU_PARSE_OUT_OF_RANGE` for nonzero numeric inputs outside that bounded contract.
 - Full parser (`ryu64_from_decimal_full`) with `RYU64_ENABLE_PARSE_BIGINT`:
   - accepts general decimal mantissas and large exponents with libc-free conversion
+  - uses a fixed-width integer fast path for non-truncated mantissas (`<=19` significant digits) with decimal exponent in `[-38, 38]`
   - supports `nan(payload)` token consumption (ASCII alnum/underscore payload)
   - returns `RYU_PARSE_OVERFLOW`/`RYU_PARSE_UNDERFLOW` for numeric range overflow/underflow
   - may return `RYU_PARSE_OUT_OF_RANGE` for extremely large internal intermediate sizes beyond fixed bigint capacity
@@ -55,7 +56,13 @@ Commands:
 make tiny
 make full
 make test
+make oracle-test
+make benchmark-speed
+make benchmark-size
 make wasm-tiny
+make nolibc-check-speed
+make nolibc-check-size
+make gen-parse-pow10
 make clean
 ```
 
@@ -64,7 +71,19 @@ Artifacts:
 - `build/libryu64_tiny.a`
 - `build/libryu64_full.a`
 - `build/test_ryu64`
+- `build/oracle_ryu64_speed`
+- `build/oracle_ryu64_size`
 - `build/wasm-tiny/*.o` (compile-only wasm32 tiny objects)
+- `build/nolibc-speed/*.o` and `build/nolibc-size/*.o` (compile-only no-libc checks)
+
+Oracle/benchmark program:
+
+- `test/oracle_stdio.c` is a dedicated libc-using test oracle that compares:
+  - printing (`ryu64_to_printf`) vs `printf`/`snprintf`
+  - scanning (`ryu64_from_decimal_tiny/full`) vs `scanf`/`sscanf`
+  - shortest/9sig via `scanf` roundtrip checks
+- It includes deterministic stress datasets and random fuzzing, and reports timing.
+- Non-oracle compile checks are provided via `nolibc-check-speed` and `nolibc-check-size`.
 
 ## API summary
 
@@ -102,9 +121,13 @@ All APIs use caller-provided buffers (`char* out`, `size_t out_cap`) and report 
 - `/include/ryu64.h`
 - `/src/*.c`
 - `/test/test_ryu64.c`
+- `/test/oracle_stdio.c`
 - `/docs/IMPLEMENTATION_LOG.md`
+- `/docs/CLEANROOM_PROTOCOL.md`
+- `/tools/gen_pow10_u128.c`
 - `/LICENSE`
 
 ## Clean-room provenance
 
 See `/docs/IMPLEMENTATION_LOG.md` for consulted-paper/spec tracking and clean-room notes.
+See `/docs/CLEANROOM_PROTOCOL.md` for the implementation/freeze/validation protocol and provenance guardrails.

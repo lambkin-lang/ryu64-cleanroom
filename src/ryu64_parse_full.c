@@ -39,6 +39,289 @@ typedef struct {
   ryu_bigint sig;
 } ryu_full_parsed;
 
+typedef struct {
+  uint64_t hi;
+  uint64_t mid;
+  uint64_t lo;
+} ryu_u192;
+
+static int ryu_u192_is_zero(const ryu_u192* v) {
+  return v->hi == 0u && v->mid == 0u && v->lo == 0u;
+}
+
+static unsigned ryu_u192_bitlen(const ryu_u192* v) {
+  if (v->hi != 0u) {
+    return 129u + ryu_log2_u64(v->hi);
+  }
+  if (v->mid != 0u) {
+    return 65u + ryu_log2_u64(v->mid);
+  }
+  if (v->lo != 0u) {
+    return 1u + ryu_log2_u64(v->lo);
+  }
+  return 0u;
+}
+
+static uint64_t ryu_u192_shr_to_u64(const ryu_u192* v, unsigned shift) {
+  if (shift == 0u) {
+    return v->lo;
+  }
+  if (shift < 64u) {
+    return (v->lo >> shift) | (v->mid << (64u - shift));
+  }
+  if (shift == 64u) {
+    return v->mid;
+  }
+  if (shift < 128u) {
+    return (v->mid >> (shift - 64u)) | (v->hi << (128u - shift));
+  }
+  if (shift == 128u) {
+    return v->hi;
+  }
+  if (shift < 192u) {
+    return v->hi >> (shift - 128u);
+  }
+  return 0u;
+}
+
+static int ryu_u192_get_bit(const ryu_u192* v, unsigned bit_index) {
+  if (bit_index < 64u) {
+    return (int)((v->lo >> bit_index) & UINT64_C(1));
+  }
+  if (bit_index < 128u) {
+    return (int)((v->mid >> (bit_index - 64u)) & UINT64_C(1));
+  }
+  if (bit_index < 192u) {
+    return (int)((v->hi >> (bit_index - 128u)) & UINT64_C(1));
+  }
+  return 0;
+}
+
+/*
+ * Returns nonzero when any bit in [0, low_bits) is set.
+ * low_bits == 0 inspects an empty range.
+ */
+static int ryu_u192_any_low_bits(const ryu_u192* v, unsigned low_bits) {
+  if (low_bits == 0u) {
+    return 0;
+  }
+  if (low_bits >= 192u) {
+    return !ryu_u192_is_zero(v);
+  }
+  if (low_bits <= 64u) {
+    uint64_t mask = (low_bits == 64u) ? UINT64_MAX : ((UINT64_C(1) << low_bits) - UINT64_C(1));
+    return (v->lo & mask) != 0u;
+  }
+  if (low_bits <= 128u) {
+    unsigned mid_bits = low_bits - 64u;
+    uint64_t mask = (mid_bits == 64u) ? UINT64_MAX : ((UINT64_C(1) << mid_bits) - UINT64_C(1));
+    return v->lo != 0u || (v->mid & mask) != 0u;
+  }
+  {
+    unsigned hi_bits = low_bits - 128u;
+    uint64_t mask = (hi_bits == 64u) ? UINT64_MAX : ((UINT64_C(1) << hi_bits) - UINT64_C(1));
+    return v->lo != 0u || v->mid != 0u || (v->hi & mask) != 0u;
+  }
+}
+
+static ryu_u192 ryu_mul_u64_u128_192(uint64_t m, const ryu_u128* p10) {
+  ryu_u128 p0 = ryu_mul_u64_u64_128(m, p10->lo);
+  ryu_u128 p1 = ryu_mul_u64_u64_128(m, p10->hi);
+  ryu_u192 out;
+  uint64_t mid = p0.hi + p1.lo;
+  uint64_t carry = (mid < p0.hi) ? 1u : 0u;
+  out.lo = p0.lo;
+  out.mid = mid;
+  out.hi = p1.hi + carry;
+  return out;
+}
+
+/*
+ * Converts a positive integer represented as u192 into nearest-even binary64.
+ */
+static ryu_parse_status ryu_fast_int_to_double(
+    int negative,
+    const ryu_u192* int_value,
+    double* out_value) {
+  unsigned nbits;
+  int q2;
+  uint64_t mant;
+  int inexact = 0;
+  uint64_t bits;
+
+  if (ryu_u192_is_zero(int_value)) {
+    bits = negative ? UINT64_C(0x8000000000000000) : UINT64_C(0);
+    *out_value = ryu_double_from_bits_local(bits);
+    return RYU_PARSE_OK;
+  }
+
+  nbits = ryu_u192_bitlen(int_value);
+  q2 = (int)nbits - 1;
+  if (q2 > 1023) {
+    return RYU_PARSE_OVERFLOW;
+  }
+
+  if (nbits <= 53u) {
+    mant = ryu_u192_shr_to_u64(int_value, 0u) << (53u - nbits);
+  } else {
+    unsigned shift = nbits - 53u;
+    int guard;
+    int sticky;
+    mant = ryu_u192_shr_to_u64(int_value, shift);
+    guard = ryu_u192_get_bit(int_value, shift - 1u);
+    sticky = ryu_u192_any_low_bits(int_value, shift - 1u);
+    inexact = guard || sticky;
+    if (guard && (sticky || ((mant & UINT64_C(1)) != 0u))) {
+      mant += UINT64_C(1);
+    }
+    if (mant == (UINT64_C(1) << 53u)) {
+      mant >>= 1u;
+      q2 += 1;
+      if (q2 > 1023) {
+        return RYU_PARSE_OVERFLOW;
+      }
+    }
+  }
+
+  bits = ((uint64_t)(q2 + 1023) << 52u) | (mant & ((UINT64_C(1) << 52u) - UINT64_C(1)));
+  if (negative) {
+    bits |= UINT64_C(1) << 63u;
+  }
+  *out_value = ryu_double_from_bits_local(bits);
+  return inexact ? RYU_PARSE_INEXACT : RYU_PARSE_OK;
+}
+
+/*
+ * Fixed-width fast path:
+ * - significand fits in uint64_t
+ * - exponent range is bounded so power-of-ten factors fit in uint128/u192 math
+ * This keeps conversion in constant-size integer math and avoids bigint.
+ */
+static ryu_parse_status ryu_fast_mq_to_double(
+    int negative,
+    uint64_t m,
+    int exp10,
+    double* out_value) {
+  ryu_u128 numer = ryu_u128_from_u64(0u);
+  ryu_u128 denom;
+  unsigned bn;
+  unsigned bd;
+  int q2;
+  ryu_u128 numer_norm;
+  ryu_u128 denom_norm;
+  ryu_u128 rem;
+  uint64_t frac = 0u;
+  uint64_t mant;
+  int guard = 0;
+  int round_bit = 0;
+  int sticky = 0;
+  uint64_t bits;
+
+  if (m == 0u) {
+    bits = negative ? UINT64_C(0x8000000000000000) : UINT64_C(0);
+    *out_value = ryu_double_from_bits_local(bits);
+    return RYU_PARSE_OK;
+  }
+
+  if (exp10 > RYU_PARSE_FAST_MAX_POS_EXP10 || exp10 < -RYU_PARSE_FAST_MAX_NEG_EXP10) {
+    return RYU_PARSE_OUT_OF_RANGE;
+  }
+
+  if (exp10 >= 0) {
+    ryu_u192 int_value = ryu_mul_u64_u128_192(m, &ryu64_pow10_u128[(size_t)exp10]);
+    return ryu_fast_int_to_double(negative, &int_value, out_value);
+  }
+  numer = ryu_u128_from_u64(m);
+  denom = ryu64_pow10_u128[(size_t)(-exp10)];
+
+  bn = ryu_u128_bitlen(&numer);
+  bd = ryu_u128_bitlen(&denom);
+  if (bn == 0u || bd == 0u) {
+    return RYU_PARSE_INVALID;
+  }
+
+  q2 = (int)bn - (int)bd;
+  if (q2 >= 0) {
+    ryu_u128 d_shift = ryu_u128_shl(&denom, (unsigned)q2);
+    if (ryu_u128_cmp(&numer, &d_shift) < 0) {
+      q2 -= 1;
+    }
+  } else {
+    ryu_u128 n_shift = ryu_u128_shl(&numer, (unsigned)(-q2));
+    if (ryu_u128_cmp(&n_shift, &denom) < 0) {
+      q2 -= 1;
+    }
+  }
+
+  if (q2 >= 0) {
+    denom_norm = ryu_u128_shl(&denom, (unsigned)q2);
+    numer_norm = numer;
+  } else {
+    denom_norm = denom;
+    numer_norm = ryu_u128_shl(&numer, (unsigned)(-q2));
+  }
+
+  if (ryu_u128_cmp(&numer_norm, &denom_norm) < 0) {
+    return RYU_PARSE_INVALID;
+  }
+
+  rem = ryu_u128_sub(&numer_norm, &denom_norm);
+
+  {
+    unsigned i;
+    for (i = 0u; i < 52u; ++i) {
+      rem = ryu_u128_shl1(&rem);
+      frac <<= 1u;
+      if (ryu_u128_cmp(&rem, &denom_norm) >= 0) {
+        rem = ryu_u128_sub(&rem, &denom_norm);
+        frac |= UINT64_C(1);
+      }
+    }
+  }
+
+  rem = ryu_u128_shl1(&rem);
+  if (ryu_u128_cmp(&rem, &denom_norm) >= 0) {
+    rem = ryu_u128_sub(&rem, &denom_norm);
+    guard = 1;
+  }
+
+  rem = ryu_u128_shl1(&rem);
+  if (ryu_u128_cmp(&rem, &denom_norm) >= 0) {
+    rem = ryu_u128_sub(&rem, &denom_norm);
+    round_bit = 1;
+  }
+
+  sticky = !ryu_u128_is_zero(&rem);
+
+  mant = (UINT64_C(1) << 52u) | frac;
+  if (guard && (round_bit || sticky || ((mant & UINT64_C(1)) != 0u))) {
+    mant += UINT64_C(1);
+  }
+
+  if (mant == (UINT64_C(1) << 53u)) {
+    mant >>= 1u;
+    q2 += 1;
+  }
+
+  if (q2 > 1023) {
+    return RYU_PARSE_OVERFLOW;
+  }
+  if (q2 < -1022) {
+    return RYU_PARSE_UNDERFLOW;
+  }
+
+  bits = ((uint64_t)(q2 + 1023) << 52u) | (mant & ((UINT64_C(1) << 52u) - UINT64_C(1)));
+  if (negative) {
+    bits |= UINT64_C(1) << 63u;
+  }
+  *out_value = ryu_double_from_bits_local(bits);
+
+  if (guard || round_bit || sticky) {
+    return RYU_PARSE_INEXACT;
+  }
+  return RYU_PARSE_OK;
+}
+
 static ryu64_parse_result ryu_parse_overflow_result(int negative, size_t parsed_len) {
   uint64_t bits = UINT64_C(0x7ff0000000000000);
   if (negative) {
@@ -508,6 +791,26 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
 
   if (!p.saw_nonzero) {
     return ryu_parse_zero_result(p.negative, p.parsed_len);
+  }
+
+  if (!p.truncated &&
+      p.sig_digits > 0 &&
+      p.sig_digits <= (long long)RYU_PARSE_TINY_MAX_SIG_DIGITS &&
+      p.exp10 >= -(long long)RYU_PARSE_FAST_MAX_NEG_EXP10 &&
+      p.exp10 <= (long long)RYU_PARSE_FAST_MAX_POS_EXP10) {
+    uint64_t m = 0u;
+    if (ryu_bigint_to_u64(&p.sig, &m)) {
+      st = ryu_fast_mq_to_double(p.negative, m, (int)p.exp10, &value);
+      if (st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT) {
+        return ryu_parse_result_make(st, value, p.parsed_len);
+      }
+      if (st == RYU_PARSE_OVERFLOW) {
+        return ryu_parse_overflow_result(p.negative, p.parsed_len);
+      }
+      if (st == RYU_PARSE_UNDERFLOW) {
+        return ryu_parse_underflow_result(p.negative, p.parsed_len);
+      }
+    }
   }
 
   dec_exp10 = (p.sig_digits - 1) + p.exp10;

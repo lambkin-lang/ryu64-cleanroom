@@ -7,6 +7,10 @@ CFLAGS_BASE ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude
 WASM_CFLAGS_BASE ?= -std=c11 -Oz -Wall -Wextra -Wpedantic -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude
 LDFLAGS_BASE ?=
 
+SPEED_CFLAGS ?= -std=c11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Iinclude
+SIZE_CFLAGS ?= -std=c11 -Oz -DNDEBUG -Wall -Wextra -Wpedantic -ffunction-sections -fdata-sections -Iinclude
+SIZE_LDFLAGS ?= -Wl,-dead_strip
+
 SRC_FMT_TINY = \
 	src/ryu64_bigint.c \
 	src/ryu64_shortest.c \
@@ -26,13 +30,18 @@ SRC_PARSE = \
 SRC_TINY = $(SRC_FMT_TINY) $(SRC_PARSE)
 SRC_FULL = $(SRC_FMT_FULL) $(SRC_PARSE)
 SRC_TEST = $(SRC_FULL)
+SRC_ORACLE = $(SRC_FULL)
 
 OBJ_TINY = $(SRC_TINY:src/%.c=build/tiny/%.o)
 OBJ_FULL = $(SRC_FULL:src/%.c=build/full/%.o)
 OBJ_TEST = $(SRC_TEST:src/%.c=build/test/%.o)
 OBJ_WASM_TINY = $(SRC_TINY:src/%.c=build/wasm-tiny/%.o)
+OBJ_ORACLE_SPEED = $(SRC_ORACLE:src/%.c=build/oracle-speed/%.o) build/oracle-speed/oracle_stdio.o
+OBJ_ORACLE_SIZE = $(SRC_ORACLE:src/%.c=build/oracle-size/%.o) build/oracle-size/oracle_stdio.o
+OBJ_NOLIBC_SPEED = $(SRC_FULL:src/%.c=build/nolibc-speed/%.o) build/nolibc-speed/test_ryu64.o
+OBJ_NOLIBC_SIZE = $(SRC_FULL:src/%.c=build/nolibc-size/%.o) build/nolibc-size/test_ryu64.o
 
-.PHONY: all tiny full test wasm-tiny clean
+.PHONY: all tiny full test oracle-test benchmark-speed benchmark-size wasm-tiny nolibc-check-speed nolibc-check-size gen-parse-pow10 clean
 
 all: full
 
@@ -40,10 +49,27 @@ tiny: build/libryu64_tiny.a
 
 full: build/libryu64_full.a
 
-test: build/test_ryu64
+test: build/test_ryu64 build/oracle_ryu64_speed
 	./build/test_ryu64
+	./build/oracle_ryu64_speed --quick
+
+oracle-test: build/oracle_ryu64_speed
+	./build/oracle_ryu64_speed --quick
+
+benchmark-speed: build/oracle_ryu64_speed
+	./build/oracle_ryu64_speed
+
+benchmark-size: build/oracle_ryu64_size
+	./build/oracle_ryu64_size
 
 wasm-tiny: $(OBJ_WASM_TINY)
+
+nolibc-check-speed: $(OBJ_NOLIBC_SPEED)
+
+nolibc-check-size: $(OBJ_NOLIBC_SIZE)
+
+gen-parse-pow10: build/gen_pow10_u128
+	./build/gen_pow10_u128
 
 build/libryu64_tiny.a: $(OBJ_TINY)
 	@mkdir -p build
@@ -56,6 +82,14 @@ build/libryu64_full.a: $(OBJ_FULL)
 build/test_ryu64: $(OBJ_TEST) build/test/test_ryu64.o
 	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(LDFLAGS_BASE) -o $@ $(OBJ_TEST) build/test/test_ryu64.o
+
+build/oracle_ryu64_speed: $(OBJ_ORACLE_SPEED)
+	@mkdir -p build
+	$(CC) $(SPEED_CFLAGS) $(LDFLAGS_BASE) -o $@ $(OBJ_ORACLE_SPEED)
+
+build/oracle_ryu64_size: $(OBJ_ORACLE_SIZE)
+	@mkdir -p build
+	$(CC) $(SIZE_CFLAGS) $(LDFLAGS_BASE) $(SIZE_LDFLAGS) -o $@ $(OBJ_ORACLE_SIZE)
 
 build/tiny/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
 	@mkdir -p build/tiny
@@ -76,6 +110,42 @@ build/test/test_ryu64.o: test/test_ryu64.c include/ryu64.h
 build/wasm-tiny/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
 	@mkdir -p build/wasm-tiny
 	$(WASM_CC) --target=wasm32 $(WASM_CFLAGS_BASE) -DRYU_TIER_TINY -c $< -o $@
+
+build/oracle-speed/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
+	@mkdir -p build/oracle-speed
+	$(CC) $(SPEED_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+
+build/oracle-size/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
+	@mkdir -p build/oracle-size
+	$(CC) $(SIZE_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+
+build/oracle-speed/oracle_stdio.o: test/oracle_stdio.c include/ryu64.h
+	@mkdir -p build/oracle-speed
+	$(CC) $(SPEED_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+
+build/oracle-size/oracle_stdio.o: test/oracle_stdio.c include/ryu64.h
+	@mkdir -p build/oracle-size
+	$(CC) $(SIZE_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+
+build/nolibc-speed/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
+	@mkdir -p build/nolibc-speed
+	$(WASM_CC) --target=wasm32 -std=c11 -O3 -DNDEBUG -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_NO_LIBC_TEST -c $< -o $@
+
+build/nolibc-size/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
+	@mkdir -p build/nolibc-size
+	$(WASM_CC) --target=wasm32 -std=c11 -Oz -DNDEBUG -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_NO_LIBC_TEST -c $< -o $@
+
+build/nolibc-speed/test_ryu64.o: test/test_ryu64.c include/ryu64.h
+	@mkdir -p build/nolibc-speed
+	$(WASM_CC) --target=wasm32 -std=c11 -O3 -DNDEBUG -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_NO_LIBC_TEST -c $< -o $@
+
+build/nolibc-size/test_ryu64.o: test/test_ryu64.c include/ryu64.h
+	@mkdir -p build/nolibc-size
+	$(WASM_CC) --target=wasm32 -std=c11 -Oz -DNDEBUG -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU_NO_LIBC_TEST -c $< -o $@
+
+build/gen_pow10_u128: tools/gen_pow10_u128.c
+	@mkdir -p build
+	$(CC) $(CFLAGS_BASE) -o $@ $<
 
 clean:
 	$(RM) -r build
