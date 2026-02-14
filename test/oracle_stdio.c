@@ -235,6 +235,39 @@ static int add_crafted_patterns(u64_vec* v) {
   return 1;
 }
 
+static int add_subnormal_stress(u64_vec* v) {
+  const uint64_t kSubMaxMant = (UINT64_C(1) << 52u) - UINT64_C(1);
+  const uint64_t kDenseWindow = UINT64_C(8192);
+  const uint64_t kScatterIters = UINT64_C(65536);
+  uint64_t i;
+  uint64_t m = UINT64_C(1);
+
+  for (i = UINT64_C(1); i <= kDenseWindow; ++i) {
+    uint64_t lo = i;
+    uint64_t hi = kSubMaxMant - (i - UINT64_C(1));
+    if (!vec_push(v, lo) || !vec_push(v, lo | (UINT64_C(1) << 63u))) {
+      return 0;
+    }
+    if (hi != lo) {
+      if (!vec_push(v, hi) || !vec_push(v, hi | (UINT64_C(1) << 63u))) {
+        return 0;
+      }
+    }
+  }
+
+  for (i = 0u; i < kScatterIters; ++i) {
+    m = (m * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407)) & kSubMaxMant;
+    if (m == 0u) {
+      m = UINT64_C(1);
+    }
+    if (!vec_push(v, m) || !vec_push(v, m | (UINT64_C(1) << 63u))) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
 static int build_deterministic_dataset(u64_vec* out) {
   out->data = NULL;
   out->len = 0u;
@@ -249,6 +282,9 @@ static int build_deterministic_dataset(u64_vec* out) {
     return 0;
   }
   if (!add_crafted_patterns(out)) {
+    return 0;
+  }
+  if (!add_subnormal_stress(out)) {
     return 0;
   }
   return 1;

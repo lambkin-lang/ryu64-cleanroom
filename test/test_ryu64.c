@@ -191,8 +191,13 @@ static int run_parser_unit_tests(void) {
   }
 
   r = ryu64_from_decimal_tiny("nan(payload)", 12u);
-  if (r.status != RYU_PARSE_OK || r.parsed_len != 3u || !isnan(r.value)) {
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 3u || bits_from_double(r.value) != UINT64_C(0x7ff8000000000000)) {
     fprintf(stderr, "nan parsing mismatch\n");
+    return 0;
+  }
+  r = ryu64_from_decimal_tiny("-nan(payload)", 13u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 4u || bits_from_double(r.value) != UINT64_C(0xfff8000000000000)) {
+    fprintf(stderr, "tiny parser signed nan payload mismatch\n");
     return 0;
   }
 
@@ -212,6 +217,12 @@ static int run_parser_unit_tests(void) {
   r = ryu64_from_decimal_tiny("1e20", 4u);
   if (r.status != RYU_PARSE_OUT_OF_RANGE || r.parsed_len != 4u) {
     fprintf(stderr, "range parsing mismatch for 1e20\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_tiny("5e-324", 6u);
+  if (r.status != RYU_PARSE_OUT_OF_RANGE || r.parsed_len != 6u) {
+    fprintf(stderr, "tiny parser should reject subnormal-scale text 5e-324\n");
     return 0;
   }
 
@@ -247,6 +258,12 @@ static int run_parser_unit_tests(void) {
     return 0;
   }
 
+  r = ryu64_from_decimal_full("5e-324", 6u);
+  if (!parse_status_success(r.status) || r.parsed_len != 6u || bits_from_double(r.value) != UINT64_C(0x0000000000000001)) {
+    fprintf(stderr, "full parser subnormal mismatch for 5e-324\n");
+    return 0;
+  }
+
   r = ryu64_from_decimal_full("-inf", 4u);
   if (r.status != RYU_PARSE_OK || r.parsed_len != 4u || !isinf(r.value) || !signbit(r.value)) {
     fprintf(stderr, "full parser inf mismatch\n");
@@ -254,8 +271,18 @@ static int run_parser_unit_tests(void) {
   }
 
   r = ryu64_from_decimal_full("nan(payload)_tail", 17u);
-  if (r.status != RYU_PARSE_OK || r.parsed_len != 12u || !isnan(r.value)) {
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 12u || bits_from_double(r.value) != UINT64_C(0x7ff8000000000000)) {
     fprintf(stderr, "full parser nan payload mismatch\n");
+    return 0;
+  }
+  r = ryu64_from_decimal_full("-nan(payload)", 13u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 13u || bits_from_double(r.value) != UINT64_C(0xfff8000000000000)) {
+    fprintf(stderr, "full parser signed nan payload mismatch\n");
+    return 0;
+  }
+  r = ryu64_from_decimal_full("nan(pay-load)", 13u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 3u || bits_from_double(r.value) != UINT64_C(0x7ff8000000000000)) {
+    fprintf(stderr, "full parser invalid nan payload should stop at bare nan\n");
     return 0;
   }
 
@@ -753,6 +780,90 @@ static int check_parse_full_vs_strtod(const char* text, size_t len, const char* 
   return 1;
 }
 
+static uint64_t parse_env_u64_or_zero(const char* name) {
+  const char* s = getenv(name);
+  char* end = NULL;
+  unsigned long long v;
+
+  if (s == NULL || s[0] == '\0') {
+    return 0u;
+  }
+  v = strtoull(s, &end, 10);
+  if (end == s || (end != NULL && *end != '\0')) {
+    return 0u;
+  }
+  return (uint64_t)v;
+}
+
+static int check_subnormal_parse_case(uint64_t bits, const char* tag) {
+  char text[128];
+  int n;
+  double x;
+
+  x = double_from_bits(bits);
+  n = snprintf(text, sizeof(text), "%.17e", x);
+  if (n <= 0 || (size_t)n >= sizeof(text)) {
+    fprintf(stderr, "snprintf subnormal failed for bits=0x%016llx\n", (unsigned long long)bits);
+    return 0;
+  }
+  return check_parse_full_vs_strtod(text, (size_t)n, tag);
+}
+
+static int run_parse_full_subnormal_vs_strtod(void) {
+  const uint64_t kSubMaxMant = (UINT64_C(1) << 52u) - UINT64_C(1);
+  const uint64_t kDenseWindow = UINT64_C(8192);
+  const uint64_t kScatterIters = UINT64_C(65536);
+  uint64_t exhaustive_limit = parse_env_u64_or_zero("RYU_EXHAUSTIVE_SUBNORMAL_LIMIT");
+  uint64_t i;
+  uint64_t m = UINT64_C(1);
+
+  for (i = UINT64_C(1); i <= kDenseWindow; ++i) {
+    uint64_t lo = i;
+    uint64_t hi = kSubMaxMant - (i - UINT64_C(1));
+    if (!check_subnormal_parse_case(lo, "subnormal-dense-lo")) {
+      return 0;
+    }
+    if (!check_subnormal_parse_case(lo | (UINT64_C(1) << 63u), "subnormal-dense-lo-neg")) {
+      return 0;
+    }
+    if (hi != lo) {
+      if (!check_subnormal_parse_case(hi, "subnormal-dense-hi")) {
+        return 0;
+      }
+      if (!check_subnormal_parse_case(hi | (UINT64_C(1) << 63u), "subnormal-dense-hi-neg")) {
+        return 0;
+      }
+    }
+  }
+
+  for (i = 0u; i < kScatterIters; ++i) {
+    m = (m * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407)) & kSubMaxMant;
+    if (m == 0u) {
+      m = UINT64_C(1);
+    }
+    if (!check_subnormal_parse_case(m, "subnormal-scatter")) {
+      return 0;
+    }
+    if (!check_subnormal_parse_case(m | (UINT64_C(1) << 63u), "subnormal-scatter-neg")) {
+      return 0;
+    }
+  }
+
+  if (exhaustive_limit > kSubMaxMant) {
+    exhaustive_limit = kSubMaxMant;
+  }
+  for (i = UINT64_C(1); i <= exhaustive_limit; ++i) {
+    if (!check_subnormal_parse_case(i, "subnormal-exhaustive")) {
+      return 0;
+    }
+    if (!check_subnormal_parse_case(i | (UINT64_C(1) << 63u), "subnormal-exhaustive-neg")) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
 static int run_parse_full_boundary_vs_strtod(void) {
   static const char* cases[] = {
       "1e20",
@@ -886,6 +997,9 @@ int main(void) {
     return 1;
   }
   if (!run_parse_full_boundary_vs_strtod()) {
+    return 1;
+  }
+  if (!run_parse_full_subnormal_vs_strtod()) {
     return 1;
   }
   if (!run_parse_full_long_truncated_vs_strtod()) {

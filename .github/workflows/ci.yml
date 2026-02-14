@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux Toolchain
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang make
+
+      - name: Tool Versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          /bin/bash --version | head -n 1
+          make --version | head -n 1
+          cc --version | head -n 1
+          clang --version | head -n 1
+
+      - name: Build And Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          make clean
+          make test
+          make wasm-tiny
+          make nolibc-check-speed
+          make nolibc-check-size

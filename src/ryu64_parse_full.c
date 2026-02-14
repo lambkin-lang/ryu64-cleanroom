@@ -47,11 +47,21 @@ typedef struct {
   uint64_t lo;
 } ryu_u192;
 
+typedef struct {
+  ryu_bigint num;
+  ryu_bigint den;
+  ryu_bigint scratch0;
+  ryu_bigint scratch1;
+  ryu_bigint scratch2;
+  ryu_bigint scratch3;
+} ryu_parse_bigint_ws;
+
 static ryu_parse_status ryu_convert_ratio_to_double(
     int negative,
     const ryu_bigint* num,
     const ryu_bigint* den,
     int exp2_adjust,
+    ryu_parse_bigint_ws* ws,
     double* out_value);
 
 static int ryu_u192_is_zero(const ryu_u192* v) {
@@ -383,50 +393,6 @@ static uint64_t ryu_status_to_bits(ryu_parse_status st, double value, int negati
   return ryu_bits_from_double_local(value);
 }
 
-static int ryu_bigint_div10_exact(ryu_bigint* a) {
-  uint64_t carry = 0u;
-  size_t idx;
-
-  if (a->len == 0u) {
-    return 0;
-  }
-  for (idx = a->len; idx > 0u; --idx) {
-    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
-    a->limb[idx - 1u] = (uint32_t)(cur / UINT64_C(10));
-    carry = cur % UINT64_C(10);
-  }
-  while (a->len > 0u && a->limb[a->len - 1u] == 0u) {
-    a->len -= 1u;
-  }
-  if (a->len == 0u) {
-    a->len = 1u;
-    a->limb[0] = 0u;
-  }
-  return carry == 0u;
-}
-
-static int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
-  uint64_t carry = 0u;
-  size_t idx;
-
-  if (a->len == 0u || div < 2u) {
-    return 0;
-  }
-  for (idx = a->len; idx > 0u; --idx) {
-    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
-    a->limb[idx - 1u] = (uint32_t)(cur / (uint64_t)div);
-    carry = cur % (uint64_t)div;
-  }
-  while (a->len > 0u && a->limb[a->len - 1u] == 0u) {
-    a->len -= 1u;
-  }
-  if (a->len == 0u) {
-    a->len = 1u;
-    a->limb[0] = 0u;
-  }
-  return carry == 0u;
-}
-
 static ryu64_parse_result ryu_result_from_convert_status(
     ryu_parse_status st,
     int negative,
@@ -447,14 +413,30 @@ static ryu64_parse_result ryu_result_from_convert_status(
 static ryu_parse_status ryu_convert_decimal_bigint_to_double(
     int negative,
     const ryu_bigint* sig,
-    long long sig_digits,
+    uint32_t sig_increment,
     long long exp10,
+    ryu_parse_bigint_ws* ws,
     double* out_value) {
+  /*
+   * ws->num/ws->den are scratch and are overwritten on every call.
+   * Callers may invoke this repeatedly with the same workspace (e.g. lower and
+   * upper truncated-interval probes). Each call always reconstructs state from
+   * the provided source significand.
+   */
+  ryu_bigint* num = &ws->num;
+  ryu_bigint* den = &ws->den;
+  long long sig_digits;
   long long dec_exp10;
   int exp2_adjust = 0;
-  ryu_bigint num;
-  ryu_bigint den;
 
+  if (num != sig) {
+    ryu_bigint_copy(num, sig);
+  }
+  if (sig_increment != 0u && !ryu_bigint_add_small(num, sig_increment)) {
+    return RYU_PARSE_OUT_OF_RANGE;
+  }
+
+  sig_digits = (long long)ryu_bigint_decimal_len(num);
   if (sig_digits <= 0) {
     return RYU_PARSE_INVALID;
   }
@@ -467,22 +449,20 @@ static ryu_parse_status ryu_convert_decimal_bigint_to_double(
     return RYU_PARSE_UNDERFLOW;
   }
 
-  ryu_bigint_copy(&num, sig);
-
-  while (exp10 < 0 && num.len != 0u && (num.limb[0] % 10u) == 0u) {
-    if (!ryu_bigint_div10_exact(&num)) {
+  while (exp10 < 0 && num->len != 0u && (num->limb[0] % 10u) == 0u) {
+    if (!ryu_bigint_div10_exact(num)) {
       break;
     }
     exp10 += 1;
   }
 
-  ryu_bigint_from_u64(&den, UINT64_C(1));
+  ryu_bigint_from_u64(den, UINT64_C(1));
 
   if (exp10 >= 0) {
     if (exp10 > 1000000) {
       return RYU_PARSE_OVERFLOW;
     }
-    if (!ryu_bigint_mul_pow5(&num, (unsigned)exp10)) {
+    if (!ryu_bigint_mul_pow5(num, (unsigned)exp10)) {
       return RYU_PARSE_OVERFLOW;
     }
     exp2_adjust = (int)exp10;
@@ -495,19 +475,19 @@ static ryu_parse_status ryu_convert_decimal_bigint_to_double(
     }
     den_pow5 = abs_exp10;
     den_pow2 = abs_exp10;
-    while (den_pow5 > 0 && num.len != 0u && (num.limb[0] % 5u) == 0u) {
-      if (!ryu_bigint_div_small_exact(&num, 5u)) {
+    while (den_pow5 > 0 && num->len != 0u && (num->limb[0] % 5u) == 0u) {
+      if (!ryu_bigint_div_small_exact(num, 5u)) {
         break;
       }
       den_pow5 -= 1;
     }
-    while (den_pow2 > 0 && num.len != 0u && (num.limb[0] % 2u) == 0u) {
-      if (!ryu_bigint_div_small_exact(&num, 2u)) {
+    while (den_pow2 > 0 && num->len != 0u && (num->limb[0] % 2u) == 0u) {
+      if (!ryu_bigint_div_small_exact(num, 2u)) {
         break;
       }
       den_pow2 -= 1;
     }
-    if (!ryu_bigint_mul_pow5(&den, (unsigned)den_pow5)) {
+    if (!ryu_bigint_mul_pow5(den, (unsigned)den_pow5)) {
       if (dec_exp10 < -325) {
         return RYU_PARSE_UNDERFLOW;
       }
@@ -516,10 +496,10 @@ static ryu_parse_status ryu_convert_decimal_bigint_to_double(
     exp2_adjust -= (int)den_pow2;
   }
 
-  return ryu_convert_ratio_to_double(negative, &num, &den, exp2_adjust, out_value);
+  return ryu_convert_ratio_to_double(negative, num, den, exp2_adjust, ws, out_value);
 }
 
-static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p) {
+static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p, ryu_parse_bigint_ws* ws) {
   long long kept_digits;
   long long exp10_adj;
   ryu_parse_status st_lo;
@@ -531,7 +511,7 @@ static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p
   }
   exp10_adj = ryu_add_ll_saturate(p->exp10, p->dropped_digits);
 
-  st_lo = ryu_convert_decimal_bigint_to_double(p->negative, &p->sig, kept_digits, exp10_adj, &lo_value);
+  st_lo = ryu_convert_decimal_bigint_to_double(p->negative, &p->sig, 0u, exp10_adj, ws, &lo_value);
   if (!p->dropped_nonzero) {
     return ryu_result_from_convert_status(st_lo, p->negative, p->parsed_len, lo_value);
   }
@@ -540,20 +520,13 @@ static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p
   }
 
   {
-    ryu_bigint upper_sig;
-    long long upper_digits;
     ryu_parse_status st_hi;
     double hi_value = 0.0;
     uint64_t lo_bits;
     uint64_t hi_bits;
     ryu_parse_status merged_status;
 
-    ryu_bigint_copy(&upper_sig, &p->sig);
-    if (!ryu_bigint_add_small(&upper_sig, 1u)) {
-      return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
-    }
-    upper_digits = (long long)ryu_bigint_decimal_len(&upper_sig);
-    st_hi = ryu_convert_decimal_bigint_to_double(p->negative, &upper_sig, upper_digits, exp10_adj, &hi_value);
+    st_hi = ryu_convert_decimal_bigint_to_double(p->negative, &p->sig, 1u, exp10_adj, ws, &hi_value);
 
     if (!ryu_status_is_value_or_range(st_lo) || !ryu_status_is_value_or_range(st_hi)) {
       return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
@@ -577,8 +550,7 @@ static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p
   }
 }
 
-static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
-  ryu_bigint prev;
+static int ryu_parse_append_digit(ryu_full_parsed* p, ryu_bigint* prev, unsigned digit) {
 
   if (p->truncated) {
     if (p->dropped_digits < (long long)INT64_MAX) {
@@ -589,9 +561,9 @@ static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
     }
     return 1;
   }
-  ryu_bigint_copy(&prev, &p->sig);
+  ryu_bigint_copy(prev, &p->sig);
   if (!ryu_bigint_mul_small(&p->sig, 10u) || !ryu_bigint_add_small(&p->sig, (uint32_t)digit)) {
-    ryu_bigint_copy(&p->sig, &prev);
+    ryu_bigint_copy(&p->sig, prev);
     p->truncated = 1;
     p->dropped_digits = 1;
     p->dropped_nonzero = (digit != 0u);
@@ -599,7 +571,11 @@ static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
   return 1;
 }
 
-static ryu_parse_status ryu_parse_full_decimal_lex(const char* s, size_t n, ryu_full_parsed* out) {
+static ryu_parse_status ryu_parse_full_decimal_lex(
+    const char* s,
+    size_t n,
+    ryu_full_parsed* out,
+    ryu_parse_bigint_ws* ws) {
   size_t i = 0u;
   size_t end_pos;
 
@@ -665,7 +641,7 @@ static ryu_parse_status ryu_parse_full_decimal_lex(const char* s, size_t n, ryu_
     if (d != 0u || out->saw_nonzero) {
       out->saw_nonzero = 1;
       out->sig_digits += 1;
-      ryu_parse_append_digit(out, d);
+      ryu_parse_append_digit(out, &ws->scratch3, d);
     }
     i += 1u;
   }
@@ -679,7 +655,7 @@ static ryu_parse_status ryu_parse_full_decimal_lex(const char* s, size_t n, ryu_
       if (d != 0u || out->saw_nonzero) {
         out->saw_nonzero = 1;
         out->sig_digits += 1;
-        ryu_parse_append_digit(out, d);
+        ryu_parse_append_digit(out, &ws->scratch3, d);
       }
       i += 1u;
     }
@@ -726,67 +702,99 @@ static ryu_parse_status ryu_parse_full_decimal_lex(const char* s, size_t n, ryu_
   return RYU_PARSE_OK;
 }
 
-static int ryu_cmp_ratio_pow2(const ryu_bigint* num, const ryu_bigint* den, int q) {
-  ryu_bigint tmp;
-  if (q >= 0) {
-    ryu_bigint_copy(&tmp, den);
-    if (!ryu_bigint_shl_bits(&tmp, (unsigned)q)) {
-      return -1;
-    }
-    return ryu_bigint_cmp(num, &tmp);
-  }
-  ryu_bigint_copy(&tmp, num);
-  if (!ryu_bigint_shl_bits(&tmp, (unsigned)(-q))) {
-    return 1;
-  }
-  return ryu_bigint_cmp(&tmp, den);
-}
-
-static int ryu_floor_log2_ratio(const ryu_bigint* num, const ryu_bigint* den, int* out_q) {
-  const int kMaxQ = 32768;
+/*
+ * Computes floor(log2(num / den)) for positive bigints.
+ * Uses limb-length bounds and incremental step probing to avoid
+ * repeatedly shifting from the original operands for each probe.
+ */
+static int ryu_floor_log2_ratio(
+    const ryu_bigint* num,
+    const ryu_bigint* den,
+    ryu_bigint* cur,
+    ryu_bigint* cand,
+    int* out_q) {
+  const int kMaxPosQ = 32767;
+  const int kMaxNegQ = 32768;
   int cmp0 = ryu_bigint_cmp(num, den);
   if (cmp0 >= 0) {
-    int low = 0;
-    int high = 1;
-    while (high < kMaxQ && ryu_cmp_ratio_pow2(num, den, high) >= 0) {
-      low = high;
-      high <<= 1;
-    }
-    while (low + 1 < high) {
-      int mid = low + (high - low) / 2;
-      if (ryu_cmp_ratio_pow2(num, den, mid) >= 0) {
-        low = mid;
+    int q = 0;
+    int step = 1;
+    int q_bound;
+
+    {
+      long long len_diff = (long long)num->len - (long long)den->len;
+      long long bound_ll = len_diff * 30ll + 29ll;
+      if (bound_ll < 1ll) {
+        q_bound = 1;
+      } else if (bound_ll > (long long)kMaxPosQ) {
+        q_bound = kMaxPosQ;
       } else {
-        high = mid;
+        q_bound = (int)bound_ll;
       }
     }
-    *out_q = low;
+
+    ryu_bigint_copy(cur, den);
+    while (step <= (q_bound / 2)) {
+      step <<= 1;
+    }
+
+    while (step > 0) {
+      if (q <= (q_bound - step)) {
+        ryu_bigint_copy(cand, cur);
+        if (ryu_bigint_shl_bits(cand, (unsigned)step) && ryu_bigint_cmp(num, cand) >= 0) {
+          q += step;
+          ryu_bigint_copy(cur, cand);
+        }
+      }
+      step >>= 1;
+    }
+
+    *out_q = q;
     return 1;
   }
 
   {
-    int prev = 0;
-    int high = 1;
-    while (high < kMaxQ && ryu_cmp_ratio_pow2(num, den, -high) < 0) {
-      prev = high;
-      high <<= 1;
-    }
-    if (high >= kMaxQ && ryu_cmp_ratio_pow2(num, den, -high) < 0) {
-      *out_q = -high;
-      return 1;
-    }
+    int t = 0;
+    int step = 1;
+    int t_bound;
+
     {
-      int left = prev + 1;
-      int right = high;
-      while (left < right) {
-        int mid = left + (right - left) / 2;
-        if (ryu_cmp_ratio_pow2(num, den, -mid) >= 0) {
-          right = mid;
-        } else {
-          left = mid + 1;
+      long long len_diff = (long long)den->len - (long long)num->len;
+      long long bound_ll = len_diff * 30ll + 30ll;
+      if (bound_ll < 1ll) {
+        t_bound = 1;
+      } else if (bound_ll > (long long)kMaxNegQ) {
+        t_bound = kMaxNegQ;
+      } else {
+        t_bound = (int)bound_ll;
+      }
+    }
+
+    ryu_bigint_copy(cur, num);
+    while (step <= (t_bound / 2)) {
+      step <<= 1;
+    }
+
+    while (step > 0) {
+      if (t <= (t_bound - step)) {
+        ryu_bigint_copy(cand, cur);
+        if (ryu_bigint_shl_bits(cand, (unsigned)step) && ryu_bigint_cmp(cand, den) < 0) {
+          t += step;
+          ryu_bigint_copy(cur, cand);
         }
       }
-      *out_q = -left;
+      step >>= 1;
+    }
+
+    /*
+     * If the bounded search reaches the hard floor, clamp to -32768.
+     * Downstream conversion logic treats this as an extreme-ratio signal and
+     * maps it through normal overflow/underflow handling.
+     */
+    if (t == kMaxNegQ) {
+      *out_q = -kMaxNegQ;
+    } else {
+      *out_q = -(t + 1);
     }
   }
   return 1;
@@ -796,31 +804,31 @@ static int ryu_round_rational_shift_to_u64(
     const ryu_bigint* num,
     const ryu_bigint* den,
     int shift,
+    ryu_parse_bigint_ws* ws,
     uint64_t* out,
     int* out_inexact) {
-  ryu_bigint scaled_num;
-  ryu_bigint scaled_den;
-  ryu_bigint rem;
-  ryu_bigint tmp;
-  ryu_bigint rem2;
+  ryu_bigint* scaled_num = &ws->scratch0;
+  ryu_bigint* scaled_den = &ws->scratch1;
+  ryu_bigint* tmp = &ws->scratch2;
+  ryu_bigint* rem2 = &ws->scratch3;
   uint64_t value = 0u;
   int q;
   int cmp_half;
   int exact;
 
-  ryu_bigint_copy(&scaled_num, num);
-  ryu_bigint_copy(&scaled_den, den);
+  ryu_bigint_copy(scaled_num, num);
+  ryu_bigint_copy(scaled_den, den);
   if (shift >= 0) {
-    if (!ryu_bigint_shl_bits(&scaled_num, (unsigned)shift)) {
+    if (!ryu_bigint_shl_bits(scaled_num, (unsigned)shift)) {
       return 0;
     }
   } else {
-    if (!ryu_bigint_shl_bits(&scaled_den, (unsigned)(-shift))) {
+    if (!ryu_bigint_shl_bits(scaled_den, (unsigned)(-shift))) {
       return 0;
     }
   }
 
-  if (!ryu_floor_log2_ratio(&scaled_num, &scaled_den, &q)) {
+  if (!ryu_floor_log2_ratio(scaled_num, scaled_den, tmp, rem2, &q)) {
     return 0;
   }
 
@@ -828,16 +836,15 @@ static int ryu_round_rational_shift_to_u64(
     return 0;
   }
 
-  ryu_bigint_copy(&rem, &scaled_num);
   if (q >= 0) {
     int bit;
     for (bit = q; bit >= 0; --bit) {
-      ryu_bigint_copy(&tmp, &scaled_den);
-      if (!ryu_bigint_shl_bits(&tmp, (unsigned)bit)) {
+      ryu_bigint_copy(tmp, scaled_den);
+      if (!ryu_bigint_shl_bits(tmp, (unsigned)bit)) {
         continue;
       }
-      if (ryu_bigint_cmp(&rem, &tmp) >= 0) {
-        if (!ryu_bigint_sub(&rem, &tmp)) {
+      if (ryu_bigint_cmp(scaled_num, tmp) >= 0) {
+        if (!ryu_bigint_sub(scaled_num, tmp)) {
           return 0;
         }
         value |= (UINT64_C(1) << (unsigned)bit);
@@ -845,12 +852,12 @@ static int ryu_round_rational_shift_to_u64(
     }
   }
 
-  exact = ryu_bigint_is_zero(&rem);
-  ryu_bigint_copy(&rem2, &rem);
-  if (!ryu_bigint_mul_small(&rem2, 2u)) {
+  exact = ryu_bigint_is_zero(scaled_num);
+  ryu_bigint_copy(rem2, scaled_num);
+  if (!ryu_bigint_mul_small(rem2, 2u)) {
     return 0;
   }
-  cmp_half = ryu_bigint_cmp(&rem2, &scaled_den);
+  cmp_half = ryu_bigint_cmp(rem2, scaled_den);
   if (cmp_half > 0 || (cmp_half == 0 && (value & UINT64_C(1)) != 0u)) {
     if (value == UINT64_MAX) {
       return 0;
@@ -868,12 +875,13 @@ static ryu_parse_status ryu_convert_ratio_to_double(
     const ryu_bigint* num,
     const ryu_bigint* den,
     int exp2_adjust,
+    ryu_parse_bigint_ws* ws,
     double* out_value) {
   int q_ratio;
   long long q_total_ll;
   int q_total;
 
-  if (!ryu_floor_log2_ratio(num, den, &q_ratio)) {
+  if (!ryu_floor_log2_ratio(num, den, &ws->scratch2, &ws->scratch3, &q_ratio)) {
     return RYU_PARSE_OUT_OF_RANGE;
   }
 
@@ -892,7 +900,7 @@ static ryu_parse_status ryu_convert_ratio_to_double(
     int inexact = 0;
     uint64_t bits;
     int shift = 1074 + exp2_adjust;
-    if (!ryu_round_rational_shift_to_u64(num, den, shift, &sub, &inexact)) {
+    if (!ryu_round_rational_shift_to_u64(num, den, shift, ws, &sub, &inexact)) {
       return RYU_PARSE_OUT_OF_RANGE;
     }
     if (sub == 0u) {
@@ -913,9 +921,9 @@ static ryu_parse_status ryu_convert_ratio_to_double(
   }
 
   {
-    ryu_bigint num_norm;
-    ryu_bigint den_norm;
-    ryu_bigint rem;
+    ryu_bigint* den_norm = &ws->scratch0;
+    ryu_bigint* rem = &ws->scratch1;
+    const ryu_bigint* den_ref;
     uint64_t frac = 0u;
     uint64_t mant;
     int guard = 0;
@@ -925,62 +933,66 @@ static ryu_parse_status ryu_convert_ratio_to_double(
     int i;
 
     if (q_ratio >= 0) {
-      ryu_bigint_copy(&num_norm, num);
-      ryu_bigint_copy(&den_norm, den);
-      if (!ryu_bigint_shl_bits(&den_norm, (unsigned)q_ratio)) {
+      ryu_bigint_copy(den_norm, den);
+      if (!ryu_bigint_shl_bits(den_norm, (unsigned)q_ratio)) {
         return RYU_PARSE_OUT_OF_RANGE;
       }
+      if (ryu_bigint_cmp(num, den_norm) < 0) {
+        return RYU_PARSE_OUT_OF_RANGE;
+      }
+      ryu_bigint_copy(rem, num);
+      if (!ryu_bigint_sub(rem, den_norm)) {
+        return RYU_PARSE_OUT_OF_RANGE;
+      }
+      den_ref = den_norm;
     } else {
-      ryu_bigint_copy(&num_norm, num);
-      if (!ryu_bigint_shl_bits(&num_norm, (unsigned)(-q_ratio))) {
+      ryu_bigint_copy(rem, num);
+      if (!ryu_bigint_shl_bits(rem, (unsigned)(-q_ratio))) {
         return RYU_PARSE_OUT_OF_RANGE;
       }
-      ryu_bigint_copy(&den_norm, den);
-    }
-
-    if (ryu_bigint_cmp(&num_norm, &den_norm) < 0) {
-      return RYU_PARSE_OUT_OF_RANGE;
-    }
-
-    ryu_bigint_copy(&rem, &num_norm);
-    if (!ryu_bigint_sub(&rem, &den_norm)) {
-      return RYU_PARSE_OUT_OF_RANGE;
+      if (ryu_bigint_cmp(rem, den) < 0) {
+        return RYU_PARSE_OUT_OF_RANGE;
+      }
+      if (!ryu_bigint_sub(rem, den)) {
+        return RYU_PARSE_OUT_OF_RANGE;
+      }
+      den_ref = den;
     }
 
     for (i = 0; i < 52; ++i) {
-      if (!ryu_bigint_mul_small(&rem, 2u)) {
+      if (!ryu_bigint_mul_small(rem, 2u)) {
         return RYU_PARSE_OUT_OF_RANGE;
       }
       frac <<= 1u;
-      if (ryu_bigint_cmp(&rem, &den_norm) >= 0) {
-        if (!ryu_bigint_sub(&rem, &den_norm)) {
+      if (ryu_bigint_cmp(rem, den_ref) >= 0) {
+        if (!ryu_bigint_sub(rem, den_ref)) {
           return RYU_PARSE_OUT_OF_RANGE;
         }
         frac |= UINT64_C(1);
       }
     }
 
-    if (!ryu_bigint_mul_small(&rem, 2u)) {
+    if (!ryu_bigint_mul_small(rem, 2u)) {
       return RYU_PARSE_OUT_OF_RANGE;
     }
-    if (ryu_bigint_cmp(&rem, &den_norm) >= 0) {
-      if (!ryu_bigint_sub(&rem, &den_norm)) {
+    if (ryu_bigint_cmp(rem, den_ref) >= 0) {
+      if (!ryu_bigint_sub(rem, den_ref)) {
         return RYU_PARSE_OUT_OF_RANGE;
       }
       guard = 1;
     }
 
-    if (!ryu_bigint_mul_small(&rem, 2u)) {
+    if (!ryu_bigint_mul_small(rem, 2u)) {
       return RYU_PARSE_OUT_OF_RANGE;
     }
-    if (ryu_bigint_cmp(&rem, &den_norm) >= 0) {
-      if (!ryu_bigint_sub(&rem, &den_norm)) {
+    if (ryu_bigint_cmp(rem, den_ref) >= 0) {
+      if (!ryu_bigint_sub(rem, den_ref)) {
         return RYU_PARSE_OUT_OF_RANGE;
       }
       round_bit = 1;
     }
 
-    sticky = !ryu_bigint_is_zero(&rem);
+    sticky = !ryu_bigint_is_zero(rem);
 
     mant = (UINT64_C(1) << 52u) | frac;
     if (guard && (round_bit || sticky || ((mant & UINT64_C(1)) != 0u))) {
@@ -1007,6 +1019,7 @@ static ryu_parse_status ryu_convert_ratio_to_double(
 
 ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
   ryu64_parse_result tiny_fast;
+  ryu_parse_bigint_ws ws;
   ryu_full_parsed p;
   ryu_parse_status st;
   long long dec_exp10;
@@ -1033,7 +1046,7 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
     }
   }
 
-  st = ryu_parse_full_decimal_lex(s, n, &p);
+  st = ryu_parse_full_decimal_lex(s, n, &p, &ws);
   if (st != RYU_PARSE_OK) {
     return ryu_parse_result_make(RYU_PARSE_INVALID, 0.0, 0u);
   }
@@ -1088,10 +1101,10 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
   }
 
   if (p.truncated) {
-    return ryu_resolve_truncated_decimal(&p);
+    return ryu_resolve_truncated_decimal(&p, &ws);
   }
 
-  st = ryu_convert_decimal_bigint_to_double(p.negative, &p.sig, p.sig_digits, p.exp10, &value);
+  st = ryu_convert_decimal_bigint_to_double(p.negative, &p.sig, 0u, p.exp10, &ws, &value);
   return ryu_result_from_convert_status(st, p.negative, p.parsed_len, value);
 }
 

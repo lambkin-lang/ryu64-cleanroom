@@ -24,28 +24,6 @@
 
 #include "ryu64_internal.h"
 
-#include <string.h>
-
-static ryu_status ryu_copy_literal(char* out, size_t out_cap, const char* lit, int negative, size_t* out_len) {
-  size_t pos = 0u;
-  size_t lit_len = strlen(lit);
-  if (negative) {
-    if (out_cap < lit_len + 2u) {
-      return RYU_BUFFER_TOO_SMALL;
-    }
-    out[pos++] = '-';
-  } else if (out_cap < lit_len + 1u) {
-    return RYU_BUFFER_TOO_SMALL;
-  }
-  memcpy(out + pos, lit, lit_len);
-  pos += lit_len;
-  out[pos] = '\0';
-  if (out_len != NULL) {
-    *out_len = pos;
-  }
-  return RYU_OK;
-}
-
 ryu_status ryu64_to_shortest(char* out, size_t out_cap, double x, size_t* out_len) {
   ryu_fp64 fp;
   uint64_t abs_bits;
@@ -82,7 +60,7 @@ ryu_status ryu64_to_shortest(char* out, size_t out_cap, double x, size_t* out_le
   }
 
   if (fp.is_zero) {
-    return ryu_copy_literal(out, out_cap, "0", fp.sign, out_len);
+    return ryu_copy_literal_signed(out, out_cap, "0", fp.sign, out_len);
   }
 
   if (!ryu_choose_shortest_digits(abs_bits, &sig, &k, &digits)) {

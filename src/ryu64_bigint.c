@@ -296,6 +296,44 @@ int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits) {
   return 1;
 }
 
+int ryu_bigint_div10_exact(ryu_bigint* a) {
+  uint64_t carry = 0u;
+  size_t idx;
+
+  if (a->len == 0u) {
+    return 0;
+  }
+  for (idx = a->len; idx > 0u; --idx) {
+    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
+    a->limb[idx - 1u] = (uint32_t)(cur / UINT64_C(10));
+    carry = cur % UINT64_C(10);
+  }
+  if (a->len == 0u) {
+    return 0;
+  }
+  ryu_bigint_normalize(a);
+  return carry == 0u;
+}
+
+int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
+  uint64_t carry = 0u;
+  size_t idx;
+
+  if (a->len == 0u || div < 2u) {
+    return 0;
+  }
+  for (idx = a->len; idx > 0u; --idx) {
+    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
+    a->limb[idx - 1u] = (uint32_t)(cur / (uint64_t)div);
+    carry = cur % (uint64_t)div;
+  }
+  if (a->len == 0u) {
+    return 0;
+  }
+  ryu_bigint_normalize(a);
+  return carry == 0u;
+}
+
 int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out) {
   uint64_t acc = 0u;
   size_t i = a->len;
@@ -823,6 +861,31 @@ int ryu_write_sign(
     *pos += 1u;
   }
   return 1;
+}
+
+ryu_status ryu_copy_literal_signed(
+    char* out,
+    size_t out_cap,
+    const char* lit,
+    int negative,
+    size_t* out_len) {
+  size_t pos = 0u;
+  size_t lit_len = strlen(lit);
+  if (negative) {
+    if (out_cap < lit_len + 2u) {
+      return RYU_BUFFER_TOO_SMALL;
+    }
+    out[pos++] = '-';
+  } else if (out_cap < lit_len + 1u) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  memcpy(out + pos, lit, lit_len);
+  pos += lit_len;
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return RYU_OK;
 }
 
 int ryu_write_special(

@@ -27,6 +27,14 @@
 
 #include <stddef.h>
 
+/*
+ * Freestanding wasm compatibility declarations.
+ *
+ * This header intentionally declares libc-like string/memory routines.
+ * Link-time definitions must be supplied by one of:
+ * - the target runtime/libc, or
+ * - wasm_compat/string.c in this repository.
+ */
 void* memcpy(void* dst, const void* src, size_t n);
 void* memmove(void* dst, const void* src, size_t n);
 int memcmp(const void* a, const void* b, size_t n);

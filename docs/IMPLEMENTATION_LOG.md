@@ -9,6 +9,14 @@ This document tracks clean-room provenance and implementation checkpoints for `r
 - Differential oracles (`snprintf`, `strtod`, `scanf`) are used only in tests.
 - Any post-freeze discrepancy resolution is done by returning to paper/spec reasoning.
 
+## AI Authorship and Mitigation Note
+
+- This implementation was authored with AI assistance by Codex (an OpenAI GPT-5-based coding agent).
+- Mitigation for provenance/correctness risk is explicit:
+  - spec-driven design from allowed papers and standards only,
+  - differential testing against independent libc oracles (`snprintf`, `strtod`, `scanf`) in test-only binaries,
+  - no copy-paste from model memory or external implementation code; discrepancies are resolved by re-deriving from specs/papers.
+
 See `/docs/CLEANROOM_PROTOCOL.md` for the operational process.
 
 ## Consulted Documents (Pre-Implementation)
@@ -64,6 +72,10 @@ The following were not used before implementation:
 - Implemented directly from paper/spec behavior targets.
 - No imported code structure from existing Ryū repositories.
 - Oracle validation uses libc behavior only in test binaries.
+- Performance note:
+  - the current clean-room shortest-digit selection uses bigint interval operations and trial-style decimal reduction,
+  - this is intentionally less lookup-heavy than classic constant-time Ryū table pipelines,
+  - the tradeoff is accepted to keep provenance/auditability simple and avoid code-structure borrowing from existing implementations.
 
 ### Parsing modules (`/src/ryu64_parse_tiny.c`, `/src/ryu64_parse_full.c`)
 

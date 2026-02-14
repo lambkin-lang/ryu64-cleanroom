@@ -32,7 +32,9 @@
 
 #define RYU_BIGINT_BASE 1000000000u
 #define RYU_BIGINT_BASE_DIGITS 9u
+#ifndef RYU_BIGINT_MAX_LIMBS
 #define RYU_BIGINT_MAX_LIMBS 1024u
+#endif
 #define RYU_LOCAL_BUF_CAP 4096u
 #define RYU_MAX_PRINTF_PRECISION 1000
 
@@ -78,6 +80,8 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m);
 int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p);
 int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p);
 int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits);
+int ryu_bigint_div10_exact(ryu_bigint* a);
+int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div);
 int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out);
 unsigned ryu_bigint_decimal_len(const ryu_bigint* a);
 int ryu_bigint_to_decimal(const ryu_bigint* a, char* out, size_t out_cap, size_t* out_len);
@@ -130,6 +134,7 @@ int ryu_write_special(
     size_t* out_len);
 
 int ryu_write_sign(char* out, size_t out_cap, int negative, int always_sign, int space_sign, size_t* pos);
+ryu_status ryu_copy_literal_signed(char* out, size_t out_cap, const char* lit, int negative, size_t* out_len);
 
 int ryu_round_exact_to_significant(
     const ryu_decimal_exact* exact,

@@ -103,6 +103,13 @@ ryu_status ryu64_to_printf(
  * - No heap, no locale, no libc parser calls.
  * - Nonzero values are accepted when they have <= 19 significant digits and
  *   effective base-10 exponent in [-19, 19].
+ * - Special tokens:
+ *   - recognizes inf/infinity (case-insensitive)
+ *   - recognizes bare nan (case-insensitive)
+ *   - does not consume nan payload syntax; for "nan(payload)" it consumes only
+ *     "nan" (or signed prefix + "nan"), leaving "(payload)" as unparsed suffix.
+ * - Subnormal-scale decimal texts (for example "5e-324") are outside this
+ *   tiny-tier bound and return RYU_PARSE_OUT_OF_RANGE.
  * - Inputs outside the tiny contract return RYU_PARSE_OUT_OF_RANGE.
  */
 ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
@@ -115,6 +122,12 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
  *   to keep intermediate rationals compact.
  * - For extremely long mantissas or ambiguous truncated intervals, the parser
  *   may return RYU_PARSE_OUT_OF_RANGE.
+ * - NaN payload syntax "nan(...)" is consumed when payload characters are
+ *   ASCII [0-9A-Za-z_], but payload bits are not preserved in output; parser
+ *   returns canonical quiet NaN (with sign if requested).
+ * - Build macro RYU_BIGINT_MAX_LIMBS (default 1024 in internal headers)
+ *   controls bigint capacity, accepted long-mantissa coverage, and parser
+ *   stack footprint.
  * - Without that macro, falls back to tiny parser coverage and may return
  *   RYU_PARSE_UNSUPPORTED for wider ranges.
  */
