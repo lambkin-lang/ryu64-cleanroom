@@ -12,7 +12,7 @@
   - `ryu64_to_printf(...)` (FULL tier)
 - Libc-free decimal text parser entry points:
   - `ryu64_from_decimal_tiny(...)`
-  - `ryu64_from_decimal_full(...)` (currently tiny-backed + unsupported outside tiny contract)
+  - `ryu64_from_decimal_full(...)` (bigint-backed when `RYU64_ENABLE_PARSE_BIGINT` is enabled)
 
 Behavior includes finite values, signed zero, infinities, and NaN.
 
@@ -32,9 +32,13 @@ Parser tier contract:
 - Tiny parser (`ryu64_from_decimal_tiny`) accepts:
   - ASCII C-locale syntax with optional leading ASCII whitespace and sign
   - finite decimal numbers with up to 19 significant digits and effective decimal exponent in `[-19, 19]`
-  - `inf`/`infinity` and `nan` (case-insensitive)
+  - `inf`/`infinity` and bare `nan` (case-insensitive)
 - Tiny parser returns `RYU_PARSE_OUT_OF_RANGE` for nonzero numeric inputs outside that bounded contract.
-- Full parser entry point is present but currently reports `RYU_PARSE_UNSUPPORTED` when input is outside tiny coverage.
+- Full parser (`ryu64_from_decimal_full`) with `RYU64_ENABLE_PARSE_BIGINT`:
+  - accepts general decimal mantissas and large exponents with libc-free conversion
+  - supports `nan(payload)` token consumption (ASCII alnum/underscore payload)
+  - returns `RYU_PARSE_OVERFLOW`/`RYU_PARSE_UNDERFLOW` for numeric range overflow/underflow
+  - may return `RYU_PARSE_OUT_OF_RANGE` for extremely large internal intermediate sizes beyond fixed bigint capacity
 
 ## Build (macOS + GNU Make 3.81 compatible)
 

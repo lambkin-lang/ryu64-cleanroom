@@ -53,6 +53,13 @@ Parser clean-room statement:
   PostgreSQL, language runtimes, or code snippets/tables) was read before writing
   `ryu64_parse_*` modules.
 
+Implementation note:
+
+- `ryu64_from_decimal_full` uses a clean-room bigint-backed rational rounding path when
+  `RYU64_ENABLE_PARSE_BIGINT` is defined; otherwise it falls back to tiny-parser coverage.
+- Full parser includes a bounded fast path delegation to the tiny parser for common numeric
+  inputs, then uses bigint conversion for out-of-bound numerics.
+
 ## Notes
 
 - Post-freeze differential comparison against external Ryu implementations is allowed,

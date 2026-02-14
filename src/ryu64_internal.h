@@ -72,6 +72,7 @@ void ryu_bigint_copy(ryu_bigint* dst, const ryu_bigint* src);
 int ryu_bigint_cmp(const ryu_bigint* a, const ryu_bigint* b);
 int ryu_bigint_add(ryu_bigint* a, const ryu_bigint* b);
 int ryu_bigint_add_small(ryu_bigint* a, uint32_t b);
+int ryu_bigint_sub(ryu_bigint* a, const ryu_bigint* b);
 int ryu_bigint_sub_small(ryu_bigint* a, uint32_t b);
 int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m);
 int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p);

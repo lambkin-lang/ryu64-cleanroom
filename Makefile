@@ -63,15 +63,15 @@ build/tiny/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_int
 
 build/full/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
 	@mkdir -p build/full
-	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -c $< -o $@
+	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -c $< -o $@
 
 build/test/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
 	@mkdir -p build/test
-	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -DRYU64_ENABLE_PARSE_BIGINT -c $< -o $@
 
 build/test/test_ryu64.o: test/test_ryu64.c include/ryu64.h
 	@mkdir -p build/test
-	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -c $< -o $@
+	$(CC) $(CFLAGS_BASE) -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -DRYU64_ENABLE_PARSE_BIGINT -c $< -o $@
 
 build/wasm-tiny/%.o: src/%.c include/ryu64.h src/ryu64_internal.h src/ryu64_parse_internal.h
 	@mkdir -p build/wasm-tiny

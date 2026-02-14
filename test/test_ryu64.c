@@ -61,6 +61,17 @@ static int parse_status_success(ryu_parse_status st) {
   return st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT;
 }
 
+static int text_has_nonzero_digit(const char* s) {
+  size_t i = 0u;
+  while (s[i] != '\0') {
+    if (s[i] >= '1' && s[i] <= '9') {
+      return 1;
+    }
+    i += 1u;
+  }
+  return 0;
+}
+
 static int expect_parse_value(
     const char* text,
     ryu_parse_status expected_status,
@@ -155,14 +166,48 @@ static int run_parser_unit_tests(void) {
   }
 
   r = ryu64_from_decimal_full("1e20", 4u);
-  if (r.status != RYU_PARSE_UNSUPPORTED || r.parsed_len != 4u) {
-    fprintf(stderr, "full parser stub mismatch\n");
+  if (!parse_status_success(r.status) || r.parsed_len != 4u) {
+    fprintf(stderr, "full parser failed on 1e20 status=%d\n", (int)r.status);
     return 0;
   }
+#if defined(RYU_ENABLE_LIBC_ORACLE)
+  {
+    char* end = NULL;
+    double oracle = strtod("1e20", &end);
+    if (end == NULL || *end != '\0' || bits_from_double(r.value) != bits_from_double(oracle)) {
+      fprintf(stderr, "full parser mismatch on 1e20\n");
+      return 0;
+    }
+  }
+#endif
 
   r = ryu64_from_decimal_full("1.25", 4u);
   if (!parse_status_success(r.status) || r.parsed_len != 4u || bits_from_double(r.value) != bits_from_double(1.25)) {
     fprintf(stderr, "full parser tiny-path mismatch\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("-inf", 4u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 4u || !isinf(r.value) || !signbit(r.value)) {
+    fprintf(stderr, "full parser inf mismatch\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("nan(payload)_tail", 17u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 12u || !isnan(r.value)) {
+    fprintf(stderr, "full parser nan payload mismatch\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("1e4000", 6u);
+  if (r.status != RYU_PARSE_OVERFLOW || !isinf(r.value)) {
+    fprintf(stderr, "full parser overflow classification mismatch\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("1e-4000", 7u);
+  if (r.status != RYU_PARSE_UNDERFLOW || bits_from_double(r.value) != UINT64_C(0x0000000000000000)) {
+    fprintf(stderr, "full parser underflow classification mismatch\n");
     return 0;
   }
 
@@ -510,6 +555,160 @@ static int run_parse_diff_vs_strtod(unsigned iters) {
 
   return 1;
 }
+
+static int run_parse_full_diff_vs_strtod(unsigned iters) {
+  uint64_t state = UINT64_C(0x7766554433221100);
+  unsigned i;
+
+  for (i = 0u; i < iters; ++i) {
+    char digits[256];
+    char text[512];
+    size_t out = 0u;
+    unsigned dcount = (unsigned)((xorshift64(&state) % 120u) + 1u);
+    unsigned j;
+    unsigned split;
+    int q = (int)(xorshift64(&state) % 641u) - 320;
+    int exp_part;
+    ryu64_parse_result p;
+    char* end = NULL;
+    double oracle;
+
+    digits[0] = (char)('1' + (xorshift64(&state) % 9u));
+    for (j = 1u; j < dcount; ++j) {
+      digits[j] = (char)('0' + (xorshift64(&state) % 10u));
+    }
+    digits[dcount] = '\0';
+
+    if ((xorshift64(&state) & UINT64_C(1)) != 0u) {
+      text[out++] = '-';
+    }
+
+    split = (unsigned)(xorshift64(&state) % (uint64_t)(dcount + 1u));
+    if (split == 0u) {
+      text[out++] = '.';
+      memcpy(text + out, digits, dcount);
+      out += dcount;
+    } else if (split == dcount) {
+      memcpy(text + out, digits, dcount);
+      out += dcount;
+    } else {
+      memcpy(text + out, digits, split);
+      out += split;
+      text[out++] = '.';
+      memcpy(text + out, digits + split, dcount - split);
+      out += dcount - split;
+    }
+
+    exp_part = q + (int)dcount - (int)split;
+    text[out++] = (xorshift64(&state) & UINT64_C(1)) != 0u ? 'E' : 'e';
+    if (exp_part >= 0) {
+      text[out++] = '+';
+    } else {
+      text[out++] = '-';
+      exp_part = -exp_part;
+    }
+    out += append_u64_dec(text + out, (uint64_t)exp_part);
+    text[out] = '\0';
+
+    p = ryu64_from_decimal_full(text, out);
+    oracle = strtod(text, &end);
+    if (end == NULL || (size_t)(end - text) != out) {
+      fprintf(stderr, "strtod full parse mismatch for '%s'\n", text);
+      return 0;
+    }
+
+    if (isinf(oracle)) {
+      if (p.status != RYU_PARSE_OVERFLOW || !isinf(p.value) || signbit(p.value) != signbit(oracle)) {
+        fprintf(stderr, "full overflow mismatch str='%s' status=%d\n", text, (int)p.status);
+        return 0;
+      }
+      continue;
+    }
+
+    if (oracle == 0.0 && digits[0] != '0') {
+      if (p.status != RYU_PARSE_UNDERFLOW && bits_from_double(p.value) != bits_from_double(oracle)) {
+        fprintf(stderr, "full underflow mismatch str='%s' status=%d\n", text, (int)p.status);
+        return 0;
+      }
+      continue;
+    }
+
+    if (!parse_status_success(p.status) || p.parsed_len != out) {
+      fprintf(stderr, "full parser rejected finite input '%s' status=%d\n", text, (int)p.status);
+      return 0;
+    }
+    if (bits_from_double(p.value) != bits_from_double(oracle)) {
+      fprintf(stderr,
+              "full parser oracle mismatch str='%s' full=0x%016llx libc=0x%016llx status=%d\n",
+              text,
+              (unsigned long long)bits_from_double(p.value),
+              (unsigned long long)bits_from_double(oracle),
+              (int)p.status);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int run_parse_full_boundary_vs_strtod(void) {
+  static const char* cases[] = {
+      "2.2250738585072014e-308",
+      "2.2250738585072013e-308",
+      "1.7976931348623157e308",
+      "1.7976931348623158e308",
+      "4.9406564584124654e-324",
+      "2.4703282292062327e-324",
+      "7.4109846876186982e-324",
+      "5e-324",
+      "2e-324",
+      "1e-323",
+      "1.0000000000000001e-308",
+      "9.999999999999999e307",
+  };
+  size_t i;
+  for (i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    const char* text = cases[i];
+    size_t len = strlen(text);
+    ryu64_parse_result p = ryu64_from_decimal_full(text, len);
+    char* end = NULL;
+    double oracle = strtod(text, &end);
+    if (end == NULL || (size_t)(end - text) != len) {
+      fprintf(stderr, "strtod boundary parse mismatch for '%s'\n", text);
+      return 0;
+    }
+    if (p.parsed_len != len) {
+      fprintf(stderr, "full boundary parsed_len mismatch for '%s'\n", text);
+      return 0;
+    }
+    if (isinf(oracle)) {
+      if (p.status != RYU_PARSE_OVERFLOW || !isinf(p.value) || signbit(p.value) != signbit(oracle)) {
+        fprintf(stderr, "full boundary overflow mismatch for '%s' status=%d\n", text, (int)p.status);
+        return 0;
+      }
+      continue;
+    }
+    if (oracle == 0.0 && text_has_nonzero_digit(text)) {
+      if (p.status != RYU_PARSE_UNDERFLOW && bits_from_double(p.value) != bits_from_double(oracle)) {
+        fprintf(stderr, "full boundary underflow mismatch for '%s' status=%d\n", text, (int)p.status);
+        return 0;
+      }
+      continue;
+    }
+    if (!parse_status_success(p.status)) {
+      fprintf(stderr, "full boundary unexpected status for '%s': %d\n", text, (int)p.status);
+      return 0;
+    }
+    if (bits_from_double(p.value) != bits_from_double(oracle)) {
+      fprintf(stderr,
+              "full boundary value mismatch for '%s': full=0x%016llx oracle=0x%016llx\n",
+              text,
+              (unsigned long long)bits_from_double(p.value),
+              (unsigned long long)bits_from_double(oracle));
+      return 0;
+    }
+  }
+  return 1;
+}
 #endif
 
 int main(void) {
@@ -534,6 +733,12 @@ int main(void) {
     return 1;
   }
   if (!run_parse_diff_vs_strtod(20000u)) {
+    return 1;
+  }
+  if (!run_parse_full_diff_vs_strtod(2000u)) {
+    return 1;
+  }
+  if (!run_parse_full_boundary_vs_strtod()) {
     return 1;
   }
 #endif

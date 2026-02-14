@@ -168,6 +168,31 @@ int ryu_bigint_add_small(ryu_bigint* a, uint32_t b) {
   return 1;
 }
 
+int ryu_bigint_sub(ryu_bigint* a, const ryu_bigint* b) {
+  size_t i;
+  uint64_t borrow = 0u;
+  if (ryu_bigint_cmp(a, b) < 0) {
+    return 0;
+  }
+  for (i = 0u; i < a->len; ++i) {
+    uint64_t av = (uint64_t)a->limb[i];
+    uint64_t bv = (i < b->len) ? (uint64_t)b->limb[i] : 0u;
+    uint64_t sub = bv + borrow;
+    if (av >= sub) {
+      a->limb[i] = (uint32_t)(av - sub);
+      borrow = 0u;
+    } else {
+      a->limb[i] = (uint32_t)(av + (uint64_t)RYU_BIGINT_BASE - sub);
+      borrow = 1u;
+    }
+  }
+  if (borrow != 0u) {
+    return 0;
+  }
+  ryu_bigint_normalize(a);
+  return 1;
+}
+
 int ryu_bigint_sub_small(ryu_bigint* a, uint32_t b) {
   uint64_t borrow = (uint64_t)b;
   size_t i = 0u;
