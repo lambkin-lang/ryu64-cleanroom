@@ -1,23 +1,80 @@
 # ryu64-cleanroom
-`ryu64-cleanroom` is a clean-room, MIT-licensed implementation of the Ryu family of float-to-string conversion algorithms for IEEE-754 binary64 (`double`), written in portable C with WebAssembly translation in mind.
 
-The library is organized into build tiers to support different consumers:
+`ryu64-cleanroom` is a clean-room, MIT-licensed portable C11 library for IEEE-754 binary64 (`double`) decimal formatting, designed with WebAssembly MVP and no-heap integration in mind.
 
-- Tiny / no-libc environments (including WebAssembly MVP and embedded targets) where `snprintf` and even `strtod` may not exist.
-- Host environments that can run extensive correctness and compatibility tests using libc as an oracle.
-- Full-featured targets that want printf-compatible formatting (`%f`, `%e`/`%E`, `%g`/`%G`) without depending on libc at runtime.
+## What it provides
 
-Key goals:
+- Shortest round-trip conversion for `double`:
+  - `ryu64_to_shortest(...)`
+- 9-significant-digit compact mode (Option 2: shortest-but-capped):
+  - `ryu64_to_9sig(...)`
+- Printf-style conversion family (`%f`, `%e`/`%E`, `%g`/`%G`):
+  - `ryu64_to_printf(...)` (FULL tier)
 
-- Clean-room provenance: implemented from the peer-reviewed Ryu papers and formatting specifications, with reference implementations used only for post-freeze cross-validation.
-- Deterministic output under C-locale assumptions (decimal point `.`; no thousands grouping).
-- No heap allocation; caller-provided buffers; explicit status codes.
-- Wasm-friendly portability: fixed-width integers, careful avoidance of undefined behavior, and optional fallbacks when 128-bit arithmetic is unavailable.
+Behavior includes finite values, signed zero, infinities, and NaN.
 
-Planned APIs include:
+## Build tiers
 
-- Shortest / round-trip safe formatting for `double`.
-- A small, fast mode capped at 9 significant digits (policy documented in the API).
-- Optional printf-style formatting compatible with common `snprintf` behavior for `%f`/`%e`/`%g`.
+The build system defines one tier macro at compile time:
 
-This project is intended as a practical, embeddable formatting core for runtimes that need predictable float64 text output across native and WebAssembly targets under a permissive MIT license.
+- `RYU_TIER_TINY`
+  - no-heap core, deterministic C-locale behavior, shortest + 9sig
+- `RYU_TIER_TEST`
+  - same implementation with test harness/oracle checks enabled in test binaries
+- `RYU_TIER_FULL`
+  - enables `ryu64_to_printf`
+
+## Build (macOS + GNU Make 3.81 compatible)
+
+Requirements:
+
+- C compiler available as `cc` (default macOS `clang` works)
+- `ar`
+- GNU Make 3.81
+- GNU bash 3.2-compatible shell commands
+
+Commands:
+
+```bash
+make tiny
+make full
+make test
+make clean
+```
+
+Artifacts:
+
+- `build/libryu64_tiny.a`
+- `build/libryu64_full.a`
+- `build/test_ryu64`
+
+## API summary
+
+See `/include/ryu64.h`.
+
+Core status:
+
+- `RYU_OK`
+- `RYU_BUFFER_TOO_SMALL`
+- `RYU_UNSUPPORTED`
+- `RYU_INVALID`
+
+All APIs use caller-provided buffers (`char* out`, `size_t out_cap`) and report output length via `size_t* out_len` when requested.
+
+## Determinism and locale
+
+- Decimal point is always `.`
+- No locale/grouping behavior
+- No dynamic allocation
+
+## Repository layout
+
+- `/include/ryu64.h`
+- `/src/*.c`
+- `/test/test_ryu64.c`
+- `/docs/IMPLEMENTATION_LOG.md`
+- `/LICENSE`
+
+## Clean-room provenance
+
+See `/docs/IMPLEMENTATION_LOG.md` for consulted-paper/spec tracking and clean-room notes.

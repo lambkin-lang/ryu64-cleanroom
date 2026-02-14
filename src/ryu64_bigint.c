@@ -1,0 +1,1239 @@
+/*
+ * MIT License
+ *
+ * Copyright (c) 2026 lambkin-lang
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+#include "ryu64_internal.h"
+
+#include <string.h>
+
+static const uint32_t kPow10Small[9] = {
+    1u,
+    10u,
+    100u,
+    1000u,
+    10000u,
+    100000u,
+    1000000u,
+    10000000u,
+    100000000u,
+};
+
+static const uint32_t kPow5Small[13] = {
+    1u,
+    5u,
+    25u,
+    125u,
+    625u,
+    3125u,
+    15625u,
+    78125u,
+    390625u,
+    1953125u,
+    9765625u,
+    48828125u,
+    244140625u,
+};
+
+static void ryu_bigint_normalize(ryu_bigint* v) {
+  while (v->len > 1u && v->limb[v->len - 1u] == 0u) {
+    v->len -= 1u;
+  }
+}
+
+void ryu_bigint_zero(ryu_bigint* v) {
+  v->len = 1u;
+  v->limb[0] = 0u;
+}
+
+void ryu_bigint_from_u64(ryu_bigint* v, uint64_t x) {
+  if (x == 0u) {
+    ryu_bigint_zero(v);
+    return;
+  }
+  v->len = 0u;
+  while (x != 0u) {
+    if (v->len >= RYU_BIGINT_MAX_LIMBS) {
+      ryu_bigint_zero(v);
+      return;
+    }
+    v->limb[v->len] = (uint32_t)(x % (uint64_t)RYU_BIGINT_BASE);
+    v->len += 1u;
+    x /= (uint64_t)RYU_BIGINT_BASE;
+  }
+}
+
+int ryu_bigint_is_zero(const ryu_bigint* v) {
+  return v->len == 1u && v->limb[0] == 0u;
+}
+
+void ryu_bigint_copy(ryu_bigint* dst, const ryu_bigint* src) {
+  dst->len = src->len;
+  memcpy(dst->limb, src->limb, src->len * sizeof(uint32_t));
+}
+
+int ryu_bigint_cmp(const ryu_bigint* a, const ryu_bigint* b) {
+  size_t i;
+  if (a->len < b->len) {
+    return -1;
+  }
+  if (a->len > b->len) {
+    return 1;
+  }
+  i = a->len;
+  while (i > 0u) {
+    size_t idx = i - 1u;
+    if (a->limb[idx] < b->limb[idx]) {
+      return -1;
+    }
+    if (a->limb[idx] > b->limb[idx]) {
+      return 1;
+    }
+    i -= 1u;
+  }
+  return 0;
+}
+
+int ryu_bigint_add(ryu_bigint* a, const ryu_bigint* b) {
+  size_t max_len = (a->len > b->len) ? a->len : b->len;
+  uint64_t carry = 0u;
+  size_t i;
+  if (max_len >= RYU_BIGINT_MAX_LIMBS) {
+    return 0;
+  }
+  for (i = 0u; i < max_len || carry != 0u; ++i) {
+    uint64_t sum;
+    if (i >= RYU_BIGINT_MAX_LIMBS) {
+      return 0;
+    }
+    if (i >= a->len) {
+      a->limb[i] = 0u;
+      a->len = i + 1u;
+    }
+    sum = (uint64_t)a->limb[i] + carry;
+    if (i < b->len) {
+      sum += (uint64_t)b->limb[i];
+    }
+    if (sum >= (uint64_t)RYU_BIGINT_BASE) {
+      a->limb[i] = (uint32_t)(sum - (uint64_t)RYU_BIGINT_BASE);
+      carry = 1u;
+    } else {
+      a->limb[i] = (uint32_t)sum;
+      carry = 0u;
+    }
+  }
+  if (a->len < max_len) {
+    a->len = max_len;
+  }
+  ryu_bigint_normalize(a);
+  return 1;
+}
+
+int ryu_bigint_add_small(ryu_bigint* a, uint32_t b) {
+  uint64_t carry = (uint64_t)b;
+  size_t i = 0u;
+  while (carry != 0u) {
+    uint64_t sum;
+    if (i >= RYU_BIGINT_MAX_LIMBS) {
+      return 0;
+    }
+    if (i >= a->len) {
+      a->limb[i] = 0u;
+      a->len = i + 1u;
+    }
+    sum = (uint64_t)a->limb[i] + carry;
+    a->limb[i] = (uint32_t)(sum % (uint64_t)RYU_BIGINT_BASE);
+    carry = sum / (uint64_t)RYU_BIGINT_BASE;
+    i += 1u;
+  }
+  return 1;
+}
+
+int ryu_bigint_sub_small(ryu_bigint* a, uint32_t b) {
+  uint64_t borrow = (uint64_t)b;
+  size_t i = 0u;
+  while (borrow != 0u) {
+    uint64_t cur;
+    if (i >= a->len) {
+      return 0;
+    }
+    cur = (uint64_t)a->limb[i];
+    if (cur >= borrow) {
+      a->limb[i] = (uint32_t)(cur - borrow);
+      borrow = 0u;
+    } else {
+      a->limb[i] = (uint32_t)(cur + (uint64_t)RYU_BIGINT_BASE - borrow);
+      borrow = 1u;
+    }
+    i += 1u;
+  }
+  ryu_bigint_normalize(a);
+  return 1;
+}
+
+int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
+  uint64_t carry = 0u;
+  size_t i;
+  if (m == 0u) {
+    ryu_bigint_zero(a);
+    return 1;
+  }
+  if (m == 1u || ryu_bigint_is_zero(a)) {
+    return 1;
+  }
+  for (i = 0u; i < a->len; ++i) {
+    uint64_t prod = (uint64_t)a->limb[i] * (uint64_t)m + carry;
+    a->limb[i] = (uint32_t)(prod % (uint64_t)RYU_BIGINT_BASE);
+    carry = prod / (uint64_t)RYU_BIGINT_BASE;
+  }
+  while (carry != 0u) {
+    if (a->len >= RYU_BIGINT_MAX_LIMBS) {
+      return 0;
+    }
+    a->limb[a->len] = (uint32_t)(carry % (uint64_t)RYU_BIGINT_BASE);
+    a->len += 1u;
+    carry /= (uint64_t)RYU_BIGINT_BASE;
+  }
+  return 1;
+}
+
+int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p) {
+  while (p != 0u) {
+    unsigned chunk = (p > 12u) ? 12u : p;
+    if (!ryu_bigint_mul_small(a, kPow5Small[chunk])) {
+      return 0;
+    }
+    p -= chunk;
+  }
+  return 1;
+}
+
+int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
+  unsigned q = p / 9u;
+  unsigned r = p % 9u;
+  size_t i;
+  if (ryu_bigint_is_zero(a)) {
+    return 1;
+  }
+  if (r != 0u && !ryu_bigint_mul_small(a, kPow10Small[r])) {
+    return 0;
+  }
+  if (q == 0u) {
+    return 1;
+  }
+  if (a->len + (size_t)q > RYU_BIGINT_MAX_LIMBS) {
+    return 0;
+  }
+  i = a->len;
+  while (i > 0u) {
+    size_t idx = i - 1u;
+    a->limb[idx + q] = a->limb[idx];
+    i -= 1u;
+  }
+  for (i = 0u; i < (size_t)q; ++i) {
+    a->limb[i] = 0u;
+  }
+  a->len += (size_t)q;
+  return 1;
+}
+
+int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits) {
+  while (bits >= 29u) {
+    if (!ryu_bigint_mul_small(a, (uint32_t)(1u << 29u))) {
+      return 0;
+    }
+    bits -= 29u;
+  }
+  if (bits != 0u) {
+    if (!ryu_bigint_mul_small(a, (uint32_t)(1u << bits))) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out) {
+  uint64_t acc = 0u;
+  size_t i = a->len;
+  while (i > 0u) {
+    size_t idx = i - 1u;
+    uint64_t next;
+    if (acc > UINT64_MAX / (uint64_t)RYU_BIGINT_BASE) {
+      return 0;
+    }
+    next = acc * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx];
+    if (next < acc) {
+      return 0;
+    }
+    acc = next;
+    i -= 1u;
+  }
+  *out = acc;
+  return 1;
+}
+
+unsigned ryu_bigint_decimal_len(const ryu_bigint* a) {
+  uint32_t top;
+  unsigned digits = 1u;
+  if (ryu_bigint_is_zero(a)) {
+    return 1u;
+  }
+  top = a->limb[a->len - 1u];
+  while (top >= 10u) {
+    top /= 10u;
+    digits += 1u;
+  }
+  digits += (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  return digits;
+}
+
+static size_t ryu_write_u32_no_pad(char* out, size_t cap, uint32_t v) {
+  char rev[10];
+  size_t n = 0u;
+  if (cap == 0u) {
+    return 0u;
+  }
+  if (v == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (v != 0u && n < sizeof(rev)) {
+    rev[n] = (char)('0' + (v % 10u));
+    v /= 10u;
+    n += 1u;
+  }
+  if (n > cap) {
+    return 0u;
+  }
+  {
+    size_t i;
+    for (i = 0u; i < n; ++i) {
+      out[i] = rev[n - 1u - i];
+    }
+  }
+  return n;
+}
+
+static void ryu_write_u32_pad9(char* out, uint32_t v) {
+  int i;
+  for (i = 8; i >= 0; --i) {
+    out[(size_t)i] = (char)('0' + (v % 10u));
+    v /= 10u;
+  }
+}
+
+int ryu_bigint_to_decimal(const ryu_bigint* a, char* out, size_t out_cap, size_t* out_len) {
+  size_t pos = 0u;
+  size_t i;
+  size_t n_top;
+  if (out_cap == 0u) {
+    return 0;
+  }
+  if (ryu_bigint_is_zero(a)) {
+    if (out_cap < 2u) {
+      return 0;
+    }
+    out[0] = '0';
+    out[1] = '\0';
+    if (out_len != NULL) {
+      *out_len = 1u;
+    }
+    return 1;
+  }
+  n_top = ryu_write_u32_no_pad(out, out_cap - 1u, a->limb[a->len - 1u]);
+  if (n_top == 0u) {
+    return 0;
+  }
+  pos += n_top;
+  i = a->len - 1u;
+  while (i > 0u) {
+    if (pos + 9u >= out_cap) {
+      return 0;
+    }
+    ryu_write_u32_pad9(out + pos, a->limb[i - 1u]);
+    pos += 9u;
+    i -= 1u;
+  }
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return 1;
+}
+
+int ryu_bigint_div_pow10_floor(
+    const ryu_bigint* n,
+    unsigned pow10,
+    ryu_bigint* q,
+    int* remainder_is_zero) {
+  unsigned q_digits = pow10 / 9u;
+  unsigned r = pow10 % 9u;
+  int rem_nonzero = 0;
+  size_t i;
+
+  if (q_digits >= n->len) {
+    ryu_bigint_zero(q);
+    if (remainder_is_zero != NULL) {
+      *remainder_is_zero = ryu_bigint_is_zero(n);
+    }
+    return 1;
+  }
+
+  q->len = n->len - (size_t)q_digits;
+  for (i = 0u; i < q->len; ++i) {
+    q->limb[i] = n->limb[i + (size_t)q_digits];
+  }
+
+  for (i = 0u; i < (size_t)q_digits; ++i) {
+    if (n->limb[i] != 0u) {
+      rem_nonzero = 1;
+      break;
+    }
+  }
+
+  if (r != 0u) {
+    uint32_t div = kPow10Small[r];
+    uint64_t carry = 0u;
+    i = q->len;
+    while (i > 0u) {
+      size_t idx = i - 1u;
+      uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)q->limb[idx];
+      q->limb[idx] = (uint32_t)(cur / (uint64_t)div);
+      carry = cur % (uint64_t)div;
+      i -= 1u;
+    }
+    if (carry != 0u) {
+      rem_nonzero = 1;
+    }
+  }
+
+  ryu_bigint_normalize(q);
+  if (remainder_is_zero != NULL) {
+    *remainder_is_zero = !rem_nonzero;
+  }
+  return 1;
+}
+
+uint64_t ryu_u64_from_double(double x) {
+  uint64_t bits;
+  memcpy(&bits, &x, sizeof(bits));
+  return bits;
+}
+
+double ryu_double_from_u64(uint64_t bits) {
+  double x;
+  memcpy(&x, &bits, sizeof(x));
+  return x;
+}
+
+void ryu_decode_fp64(double x, ryu_fp64* out) {
+  uint64_t bits = ryu_u64_from_double(x);
+  int exp_raw = (int)((bits >> 52u) & 0x7ffu);
+  uint64_t frac = bits & ((UINT64_C(1) << 52u) - UINT64_C(1));
+
+  out->sign = (int)(bits >> 63u);
+  out->bits = bits;
+  out->exp_raw = exp_raw;
+  out->mantissa = 0u;
+  out->is_nan = 0;
+  out->is_inf = 0;
+  out->is_zero = 0;
+  out->exp2 = 0;
+
+  if (exp_raw == 0x7ff) {
+    if (frac == 0u) {
+      out->is_inf = 1;
+    } else {
+      out->is_nan = 1;
+    }
+    return;
+  }
+
+  if (exp_raw == 0) {
+    if (frac == 0u) {
+      out->is_zero = 1;
+      out->exp2 = -1074;
+      return;
+    }
+    out->mantissa = frac;
+    out->exp2 = -1074;
+    return;
+  }
+
+  out->mantissa = (UINT64_C(1) << 52u) | frac;
+  out->exp2 = exp_raw - 1075;
+}
+
+static int ryu_rational_from_bits(uint64_t bits, ryu_bigint* num, unsigned* den_exp) {
+  uint64_t exp_raw = (bits >> 52u) & 0x7ffu;
+  uint64_t frac = bits & ((UINT64_C(1) << 52u) - UINT64_C(1));
+  uint64_t m;
+  int e2;
+  if (exp_raw == 0x7ffu) {
+    return 0;
+  }
+  if (exp_raw == 0u) {
+    if (frac == 0u) {
+      ryu_bigint_zero(num);
+      *den_exp = 0u;
+      return 1;
+    }
+    m = frac;
+    e2 = -1074;
+  } else {
+    m = (UINT64_C(1) << 52u) | frac;
+    e2 = (int)exp_raw - 1075;
+  }
+  ryu_bigint_from_u64(num, m);
+  if (e2 >= 0) {
+    if (!ryu_bigint_shl_bits(num, (unsigned)e2)) {
+      return 0;
+    }
+    *den_exp = 0u;
+  } else {
+    *den_exp = (unsigned)(-e2);
+  }
+  return 1;
+}
+
+static int ryu_midpoint(
+    const ryu_bigint* a_num,
+    unsigned a_den,
+    const ryu_bigint* b_num,
+    unsigned b_den,
+    ryu_bigint* out_num,
+    unsigned* out_den) {
+  unsigned k = (a_den > b_den) ? a_den : b_den;
+  ryu_bigint ta;
+  ryu_bigint tb;
+
+  ryu_bigint_copy(&ta, a_num);
+  ryu_bigint_copy(&tb, b_num);
+
+  if (k > a_den && !ryu_bigint_shl_bits(&ta, k - a_den)) {
+    return 0;
+  }
+  if (k > b_den && !ryu_bigint_shl_bits(&tb, k - b_den)) {
+    return 0;
+  }
+  if (!ryu_bigint_add(&ta, &tb)) {
+    return 0;
+  }
+  ryu_bigint_copy(out_num, &ta);
+  *out_den = k + 1u;
+  return 1;
+}
+
+int ryu_exact_decimal_from_bits(uint64_t abs_bits, ryu_decimal_exact* out) {
+  ryu_fp64 fp;
+  double x;
+  if ((abs_bits >> 63u) != 0u) {
+    return 0;
+  }
+  x = ryu_double_from_u64(abs_bits);
+  ryu_decode_fp64(x, &fp);
+  if (fp.is_nan || fp.is_inf) {
+    return 0;
+  }
+  if (fp.is_zero) {
+    ryu_bigint_zero(&out->digits);
+    out->scale = 0u;
+    return 1;
+  }
+
+  ryu_bigint_from_u64(&out->digits, fp.mantissa);
+  if (fp.exp2 >= 0) {
+    if (!ryu_bigint_shl_bits(&out->digits, (unsigned)fp.exp2)) {
+      return 0;
+    }
+    out->scale = 0u;
+  } else {
+    unsigned d = (unsigned)(-fp.exp2);
+    if (!ryu_bigint_mul_pow5(&out->digits, d)) {
+      return 0;
+    }
+    out->scale = d;
+  }
+  return 1;
+}
+
+int ryu_decimal_interval_from_bits(uint64_t abs_bits, ryu_decimal_interval* out) {
+  ryu_bigint x_num;
+  ryu_bigint p_num;
+  ryu_bigint n_num;
+  ryu_bigint low_num;
+  ryu_bigint high_num;
+  unsigned x_den;
+  unsigned p_den;
+  unsigned n_den;
+  unsigned low_den;
+  unsigned high_den;
+  unsigned q;
+  uint64_t exp_raw;
+  uint64_t frac;
+  uint64_t m;
+  int even;
+
+  if (abs_bits == 0u) {
+    return 0;
+  }
+  if (abs_bits >= UINT64_C(0x7ff0000000000000)) {
+    return 0;
+  }
+  if (abs_bits == UINT64_C(0x7fefffffffffffff)) {
+    return 0;
+  }
+
+  exp_raw = (abs_bits >> 52u) & 0x7ffu;
+  frac = abs_bits & ((UINT64_C(1) << 52u) - UINT64_C(1));
+  if (exp_raw == 0u) {
+    m = frac;
+  } else {
+    m = (UINT64_C(1) << 52u) | frac;
+  }
+  even = ((m & UINT64_C(1)) == UINT64_C(0));
+
+  if (!ryu_rational_from_bits(abs_bits, &x_num, &x_den)) {
+    return 0;
+  }
+  if (!ryu_rational_from_bits(abs_bits - UINT64_C(1), &p_num, &p_den)) {
+    return 0;
+  }
+  if (!ryu_rational_from_bits(abs_bits + UINT64_C(1), &n_num, &n_den)) {
+    return 0;
+  }
+
+  if (!ryu_midpoint(&p_num, p_den, &x_num, x_den, &low_num, &low_den)) {
+    return 0;
+  }
+  if (!ryu_midpoint(&x_num, x_den, &n_num, n_den, &high_num, &high_den)) {
+    return 0;
+  }
+
+  q = (low_den > high_den) ? low_den : high_den;
+
+  ryu_bigint_copy(&out->low, &low_num);
+  if (!ryu_bigint_mul_pow5(&out->low, low_den)) {
+    return 0;
+  }
+  if (q > low_den && !ryu_bigint_mul_pow10(&out->low, q - low_den)) {
+    return 0;
+  }
+
+  ryu_bigint_copy(&out->high, &high_num);
+  if (!ryu_bigint_mul_pow5(&out->high, high_den)) {
+    return 0;
+  }
+  if (q > high_den && !ryu_bigint_mul_pow10(&out->high, q - high_den)) {
+    return 0;
+  }
+
+  out->scale = q;
+  out->low_closed = even;
+  out->high_closed = even;
+  return 1;
+}
+
+int ryu_choose_shortest_digits(
+    uint64_t abs_bits,
+    uint64_t* out_significand,
+    int* out_k,
+    int* out_digits) {
+  ryu_decimal_interval interval;
+  int t;
+
+  if (abs_bits == 0u) {
+    *out_significand = 0u;
+    *out_k = 0;
+    *out_digits = 1;
+    return 1;
+  }
+
+  if (abs_bits == UINT64_C(0x7fefffffffffffff)) {
+    *out_significand = UINT64_C(17976931348623157);
+    *out_k = 292;
+    *out_digits = 17;
+    return 1;
+  }
+
+  if (!ryu_decimal_interval_from_bits(abs_bits, &interval)) {
+    return 0;
+  }
+
+  t = (int)ryu_bigint_decimal_len(&interval.high);
+  for (; t >= 0; --t) {
+    ryu_bigint floor_low;
+    ryu_bigint floor_high;
+    ryu_bigint n_min;
+    ryu_bigint n_max;
+    int low_rem_zero = 0;
+    int high_rem_zero = 0;
+
+    if (!ryu_bigint_div_pow10_floor(&interval.low, (unsigned)t, &floor_low, &low_rem_zero)) {
+      return 0;
+    }
+    if (!ryu_bigint_div_pow10_floor(&interval.high, (unsigned)t, &floor_high, &high_rem_zero)) {
+      return 0;
+    }
+
+    ryu_bigint_copy(&n_min, &floor_low);
+    if (!low_rem_zero) {
+      if (!ryu_bigint_add_small(&n_min, 1u)) {
+        return 0;
+      }
+    }
+    if (!interval.low_closed && low_rem_zero) {
+      if (!ryu_bigint_add_small(&n_min, 1u)) {
+        return 0;
+      }
+    }
+
+    ryu_bigint_copy(&n_max, &floor_high);
+    if (!interval.high_closed && high_rem_zero) {
+      if (ryu_bigint_is_zero(&n_max)) {
+        continue;
+      }
+      if (!ryu_bigint_sub_small(&n_max, 1u)) {
+        continue;
+      }
+    }
+
+    if (ryu_bigint_is_zero(&n_max)) {
+      continue;
+    }
+    if (ryu_bigint_is_zero(&n_min)) {
+      if (!ryu_bigint_add_small(&n_min, 1u)) {
+        return 0;
+      }
+    }
+
+    if (ryu_bigint_cmp(&n_min, &n_max) <= 0) {
+      uint64_t sig;
+      if (!ryu_bigint_to_u64(&n_min, &sig)) {
+        return 0;
+      }
+      *out_significand = sig;
+      *out_k = t - (int)interval.scale;
+      *out_digits = (int)ryu_bigint_decimal_len(&n_min);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+static size_t ryu_u64_to_dec(uint64_t x, char* out) {
+  char rev[32];
+  size_t n = 0u;
+  if (x == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (x != 0u) {
+    rev[n] = (char)('0' + (x % UINT64_C(10)));
+    x /= UINT64_C(10);
+    n += 1u;
+  }
+  {
+    size_t i;
+    for (i = 0u; i < n; ++i) {
+      out[i] = rev[n - 1u - i];
+    }
+  }
+  return n;
+}
+
+static size_t ryu_i32_to_dec(int x, char* out) {
+  uint32_t u = (x < 0) ? (uint32_t)(-x) : (uint32_t)x;
+  return ryu_u64_to_dec((uint64_t)u, out);
+}
+
+int ryu_write_sign(
+    char* out,
+    size_t out_cap,
+    int negative,
+    int always_sign,
+    int space_sign,
+    size_t* pos) {
+  if (negative) {
+    if (*pos >= out_cap) {
+      return 0;
+    }
+    out[*pos] = '-';
+    *pos += 1u;
+    return 1;
+  }
+  if (always_sign) {
+    if (*pos >= out_cap) {
+      return 0;
+    }
+    out[*pos] = '+';
+    *pos += 1u;
+    return 1;
+  }
+  if (space_sign) {
+    if (*pos >= out_cap) {
+      return 0;
+    }
+    out[*pos] = ' ';
+    *pos += 1u;
+  }
+  return 1;
+}
+
+int ryu_write_special(
+    char* out,
+    size_t out_cap,
+    int negative,
+    int is_inf,
+    int uppercase,
+    int always_sign,
+    int space_sign,
+    size_t* out_len) {
+  const char* lit = is_inf ? (uppercase ? "INF" : "inf") : (uppercase ? "NAN" : "nan");
+  size_t lit_len = 3u;
+  size_t pos = 0u;
+
+  if (!ryu_write_sign(out, out_cap, negative, always_sign, space_sign, &pos)) {
+    return 0;
+  }
+  if (pos + lit_len >= out_cap) {
+    return 0;
+  }
+  memcpy(out + pos, lit, lit_len);
+  pos += lit_len;
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return 1;
+}
+
+int ryu_format_significand_exponent(
+    char* out,
+    size_t out_cap,
+    int negative,
+    uint64_t significand,
+    int k,
+    int prefer_scientific,
+    size_t* out_len) {
+  char digits[32];
+  size_t dlen;
+  char plain[RYU_LOCAL_BUF_CAP];
+  char sci[128];
+  size_t ppos = 0u;
+  size_t spos = 0u;
+  int exp10;
+  size_t i;
+
+  dlen = ryu_u64_to_dec(significand, digits);
+
+  if (!ryu_write_sign(plain, sizeof(plain), negative, 0, 0, &ppos)) {
+    return 0;
+  }
+  if (k >= 0) {
+    if (ppos + dlen + (size_t)k >= sizeof(plain)) {
+      return 0;
+    }
+    memcpy(plain + ppos, digits, dlen);
+    ppos += dlen;
+    for (i = 0u; i < (size_t)k; ++i) {
+      plain[ppos + i] = '0';
+    }
+    ppos += (size_t)k;
+  } else {
+    int split = (int)dlen + k;
+    if (split > 0) {
+      if (ppos + dlen + 1u >= sizeof(plain)) {
+        return 0;
+      }
+      memcpy(plain + ppos, digits, (size_t)split);
+      ppos += (size_t)split;
+      plain[ppos++] = '.';
+      memcpy(plain + ppos, digits + (size_t)split, dlen - (size_t)split);
+      ppos += dlen - (size_t)split;
+    } else {
+      size_t zeros = (size_t)(-split);
+      if (ppos + 2u + zeros + dlen >= sizeof(plain)) {
+        return 0;
+      }
+      plain[ppos++] = '0';
+      plain[ppos++] = '.';
+      for (i = 0u; i < zeros; ++i) {
+        plain[ppos + i] = '0';
+      }
+      ppos += zeros;
+      memcpy(plain + ppos, digits, dlen);
+      ppos += dlen;
+    }
+  }
+  plain[ppos] = '\0';
+
+  if (!ryu_write_sign(sci, sizeof(sci), negative, 0, 0, &spos)) {
+    return 0;
+  }
+  if (spos + dlen + 8u >= sizeof(sci)) {
+    return 0;
+  }
+  sci[spos++] = digits[0];
+  if (dlen > 1u) {
+    sci[spos++] = '.';
+    memcpy(sci + spos, digits + 1u, dlen - 1u);
+    spos += dlen - 1u;
+  }
+  exp10 = k + (int)dlen - 1;
+  sci[spos++] = 'e';
+  if (exp10 < 0) {
+    sci[spos++] = '-';
+    exp10 = -exp10;
+  }
+  spos += ryu_i32_to_dec(exp10, sci + spos);
+  sci[spos] = '\0';
+
+  if (prefer_scientific || spos < ppos) {
+    if (spos + 1u > out_cap) {
+      return 0;
+    }
+    memcpy(out, sci, spos + 1u);
+    if (out_len != NULL) {
+      *out_len = spos;
+    }
+  } else {
+    if (ppos + 1u > out_cap) {
+      return 0;
+    }
+    memcpy(out, plain, ppos + 1u);
+    if (out_len != NULL) {
+      *out_len = ppos;
+    }
+  }
+  return 1;
+}
+
+int ryu_format_scientific_fixed_sig(
+    char* out,
+    size_t out_cap,
+    int negative,
+    uint64_t significand,
+    unsigned sig_digits,
+    int exp10,
+    int uppercase,
+    size_t* out_len) {
+  char digits[32];
+  size_t dlen = ryu_u64_to_dec(significand, digits);
+  size_t pos = 0u;
+  char e_char = uppercase ? 'E' : 'e';
+  int e = exp10;
+
+  if (sig_digits == 0u) {
+    return 0;
+  }
+
+  if (!ryu_write_sign(out, out_cap, negative, 0, 0, &pos)) {
+    return 0;
+  }
+
+  if (dlen < (size_t)sig_digits) {
+    unsigned pad = sig_digits - (unsigned)dlen;
+    while (pad != 0u) {
+      if (dlen + 1u >= sizeof(digits)) {
+        return 0;
+      }
+      digits[dlen++] = '0';
+      e -= 1;
+      pad -= 1u;
+    }
+  }
+
+  if (pos + dlen + 8u >= out_cap) {
+    return 0;
+  }
+
+  out[pos++] = digits[0];
+  if (sig_digits > 1u) {
+    out[pos++] = '.';
+    memcpy(out + pos, digits + 1u, (size_t)sig_digits - 1u);
+    pos += (size_t)sig_digits - 1u;
+  }
+
+  out[pos++] = e_char;
+  if (e < 0) {
+    out[pos++] = '-';
+    e = -e;
+  }
+  pos += ryu_i32_to_dec(e, out + pos);
+  if (pos >= out_cap) {
+    return 0;
+  }
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return 1;
+}
+
+static int ryu_bigint_from_decimal(const char* s, size_t len, ryu_bigint* out) {
+  size_t i;
+  ryu_bigint_zero(out);
+  for (i = 0u; i < len; ++i) {
+    unsigned d;
+    if (s[i] < '0' || s[i] > '9') {
+      return 0;
+    }
+    d = (unsigned)(s[i] - '0');
+    if (!ryu_bigint_mul_small(out, 10u)) {
+      return 0;
+    }
+    if (!ryu_bigint_add_small(out, (uint32_t)d)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int ryu_round_integer_div_pow10(
+    const ryu_bigint* value,
+    unsigned drop,
+    ryu_bigint* rounded) {
+  char dec[RYU_LOCAL_BUF_CAP];
+  size_t len = 0u;
+  int cut;
+  size_t keep_len;
+  char round_digit;
+  int tail_nonzero = 0;
+  char last_kept;
+
+  if (drop == 0u) {
+    ryu_bigint_copy(rounded, value);
+    return 1;
+  }
+  if (!ryu_bigint_to_decimal(value, dec, sizeof(dec), &len)) {
+    return 0;
+  }
+
+  cut = (int)len - (int)drop;
+  keep_len = (cut > 0) ? (size_t)cut : 0u;
+
+  if (keep_len == 0u) {
+    ryu_bigint_zero(rounded);
+    last_kept = '0';
+  } else {
+    if (!ryu_bigint_from_decimal(dec, keep_len, rounded)) {
+      return 0;
+    }
+    last_kept = dec[keep_len - 1u];
+  }
+
+  if (cut < 0) {
+    round_digit = '0';
+    tail_nonzero = !ryu_bigint_is_zero(value);
+  } else if ((size_t)cut >= len) {
+    round_digit = '0';
+  } else {
+    size_t i;
+    round_digit = dec[(size_t)cut];
+    for (i = (size_t)cut + 1u; i < len; ++i) {
+      if (dec[i] != '0') {
+        tail_nonzero = 1;
+        break;
+      }
+    }
+  }
+
+  if (round_digit > '5' ||
+      (round_digit == '5' && (tail_nonzero || (((last_kept - '0') & 1) != 0)))) {
+    if (!ryu_bigint_add_small(rounded, 1u)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+int ryu_round_exact_to_significant(
+    const ryu_decimal_exact* exact,
+    unsigned sig_digits,
+    ryu_bigint* out_rounded,
+    int* out_exp10) {
+  unsigned len;
+  int exp10;
+  if (sig_digits == 0u) {
+    return 0;
+  }
+  if (ryu_bigint_is_zero(&exact->digits)) {
+    ryu_bigint_zero(out_rounded);
+    *out_exp10 = 0;
+    return 1;
+  }
+
+  len = ryu_bigint_decimal_len(&exact->digits);
+  exp10 = (int)len - (int)exact->scale - 1;
+
+  if (len > sig_digits) {
+    unsigned drop = len - sig_digits;
+    if (!ryu_round_integer_div_pow10(&exact->digits, drop, out_rounded)) {
+      return 0;
+    }
+  } else {
+    ryu_bigint_copy(out_rounded, &exact->digits);
+    if (!ryu_bigint_mul_pow10(out_rounded, sig_digits - len)) {
+      return 0;
+    }
+  }
+
+  while (ryu_bigint_decimal_len(out_rounded) > sig_digits) {
+    ryu_bigint tmp;
+    int rem_zero = 0;
+    if (!ryu_bigint_div_pow10_floor(out_rounded, 1u, &tmp, &rem_zero)) {
+      return 0;
+    }
+    ryu_bigint_copy(out_rounded, &tmp);
+    exp10 += 1;
+  }
+
+  *out_exp10 = exp10;
+  return 1;
+}
+
+int ryu_round_exact_to_fractional(
+    const ryu_decimal_exact* exact,
+    unsigned frac_digits,
+    ryu_bigint* out_rounded) {
+  if (exact->scale <= frac_digits) {
+    ryu_bigint_copy(out_rounded, &exact->digits);
+    return ryu_bigint_mul_pow10(out_rounded, frac_digits - exact->scale);
+  }
+  return ryu_round_integer_div_pow10(&exact->digits, exact->scale - frac_digits, out_rounded);
+}
+
+int ryu_emit_fixed_from_scaled(
+    char* out,
+    size_t out_cap,
+    int negative,
+    const ryu_bigint* scaled,
+    unsigned frac_digits,
+    int alternate_form,
+    int always_sign,
+    int space_sign,
+    size_t* out_len) {
+  char dec[RYU_LOCAL_BUF_CAP];
+  size_t len = 0u;
+  size_t pos = 0u;
+
+  if (!ryu_bigint_to_decimal(scaled, dec, sizeof(dec), &len)) {
+    return 0;
+  }
+
+  if (!ryu_write_sign(out, out_cap, negative, always_sign, space_sign, &pos)) {
+    return 0;
+  }
+
+  if (frac_digits == 0u) {
+    if (pos + len + 2u > out_cap) {
+      return 0;
+    }
+    memcpy(out + pos, dec, len);
+    pos += len;
+    if (alternate_form) {
+      out[pos++] = '.';
+    }
+    out[pos] = '\0';
+    if (out_len != NULL) {
+      *out_len = pos;
+    }
+    return 1;
+  }
+
+  if (len <= (size_t)frac_digits) {
+    size_t zeros = (size_t)frac_digits - len;
+    if (pos + 2u + zeros + len + 1u > out_cap) {
+      return 0;
+    }
+    out[pos++] = '0';
+    out[pos++] = '.';
+    while (zeros != 0u) {
+      out[pos++] = '0';
+      zeros -= 1u;
+    }
+    memcpy(out + pos, dec, len);
+    pos += len;
+  } else {
+    size_t int_len = len - (size_t)frac_digits;
+    if (pos + len + 2u > out_cap) {
+      return 0;
+    }
+    memcpy(out + pos, dec, int_len);
+    pos += int_len;
+    out[pos++] = '.';
+    memcpy(out + pos, dec + int_len, (size_t)frac_digits);
+    pos += (size_t)frac_digits;
+  }
+
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return 1;
+}
+
+int ryu_trim_trailing_fraction_zeros(char* buf, size_t* len) {
+  size_t l = *len;
+  size_t e_pos = l;
+  size_t dot_pos = l;
+  size_t trim_end;
+  size_t i;
+
+  for (i = 0u; i < l; ++i) {
+    if (buf[i] == 'e' || buf[i] == 'E') {
+      e_pos = i;
+      break;
+    }
+  }
+  for (i = 0u; i < e_pos; ++i) {
+    if (buf[i] == '.') {
+      dot_pos = i;
+      break;
+    }
+  }
+  if (dot_pos == l) {
+    return 1;
+  }
+
+  trim_end = e_pos;
+  while (trim_end > dot_pos + 1u && buf[trim_end - 1u] == '0') {
+    trim_end -= 1u;
+  }
+  if (trim_end == dot_pos + 1u) {
+    trim_end -= 1u;
+  }
+
+  if (e_pos < l) {
+    size_t tail = l - e_pos;
+    memmove(buf + trim_end, buf + e_pos, tail + 1u);
+    l = trim_end + tail;
+  } else {
+    buf[trim_end] = '\0';
+    l = trim_end;
+  }
+
+  *len = l;
+  return 1;
+}
