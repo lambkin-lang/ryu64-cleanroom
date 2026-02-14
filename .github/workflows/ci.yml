@@ -38,6 +38,12 @@ jobs:
           set -euo pipefail
           make clean
           make test
+
+      - name: WASM Compile Checks
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
           make wasm-tiny
           make nolibc-check-speed
           make nolibc-check-size

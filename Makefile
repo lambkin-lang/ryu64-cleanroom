@@ -3,13 +3,21 @@ AR ?= ar
 RM ?= rm -f
 WASM_CC ?= clang
 
+UNAME_S := $(shell uname -s)
+
 CFLAGS_BASE ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude
 WASM_CFLAGS_BASE ?= -std=c11 -Oz -Wall -Wextra -Wpedantic -ffreestanding -fno-builtin -nostdinc -Iwasm_compat -Iinclude
 LDFLAGS_BASE ?=
 
 SPEED_CFLAGS ?= -std=c11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Iinclude
 SIZE_CFLAGS ?= -std=c11 -Oz -DNDEBUG -Wall -Wextra -Wpedantic -ffunction-sections -fdata-sections -Iinclude
-SIZE_LDFLAGS ?= -Wl,-dead_strip
+ifeq ($(UNAME_S),Darwin)
+  SIZE_LDFLAGS ?= -Wl,-dead_strip
+else
+  SIZE_LDFLAGS ?= -Wl,--gc-sections
+endif
+
+LIBS_MATH = -lm
 DEPFLAGS = -MMD -MP -MT $@ -MF $(@:.o=.d)
 
 SRC_FMT_TINY = \
@@ -96,15 +104,15 @@ build/libryu64_full.a: $(OBJ_FULL)
 
 build/test_ryu64: $(OBJ_TEST) build/test/test_ryu64.o
 	@mkdir -p build
-	$(CC) $(CFLAGS_BASE) $(LDFLAGS_BASE) -o $@ $(OBJ_TEST) build/test/test_ryu64.o
+	$(CC) $(CFLAGS_BASE) $(LDFLAGS_BASE) -o $@ $(OBJ_TEST) build/test/test_ryu64.o $(LIBS_MATH)
 
 build/oracle_ryu64_speed: $(OBJ_ORACLE_SPEED)
 	@mkdir -p build
-	$(CC) $(SPEED_CFLAGS) $(LDFLAGS_BASE) -o $@ $(OBJ_ORACLE_SPEED)
+	$(CC) $(SPEED_CFLAGS) $(LDFLAGS_BASE) -o $@ $(OBJ_ORACLE_SPEED) $(LIBS_MATH)
 
 build/oracle_ryu64_size: $(OBJ_ORACLE_SIZE)
 	@mkdir -p build
-	$(CC) $(SIZE_CFLAGS) $(LDFLAGS_BASE) $(SIZE_LDFLAGS) -o $@ $(OBJ_ORACLE_SIZE)
+	$(CC) $(SIZE_CFLAGS) $(LDFLAGS_BASE) $(SIZE_LDFLAGS) -o $@ $(OBJ_ORACLE_SIZE) $(LIBS_MATH)
 
 build/tiny/%.o: src/%.c
 	@mkdir -p build/tiny
