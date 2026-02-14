@@ -535,7 +535,8 @@ static int compare_scan_full_with_oracle(
     double oracle_value,
     size_t oracle_len,
     oracle_stats* stats,
-    const char* tag) {
+    const char* tag,
+    int allow_out_of_range) {
   ryu64_parse_result r = ryu64_from_decimal_full(text, text_len);
 
   if (r.parsed_len != oracle_len) {
@@ -554,10 +555,27 @@ static int compare_scan_full_with_oracle(
   if (isinf(oracle_value)) {
     if (!(r.status == RYU_PARSE_OVERFLOW || r.status == RYU_PARSE_OK) || !isinf(r.value)) {
       stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[%s] inf mismatch text='%s' status=%d val=0x%016llx oracle=0x%016llx\n",
+                tag,
+                text,
+                (int)r.status,
+                (unsigned long long)bits_from_double(r.value),
+                (unsigned long long)bits_from_double(oracle_value));
+      }
       return 0;
     }
     if (signbit(r.value) != signbit(oracle_value)) {
       stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[%s] inf sign mismatch text='%s' val=0x%016llx oracle=0x%016llx\n",
+                tag,
+                text,
+                (unsigned long long)bits_from_double(r.value),
+                (unsigned long long)bits_from_double(oracle_value));
+      }
       return 0;
     }
     return 1;
@@ -566,13 +584,34 @@ static int compare_scan_full_with_oracle(
   if (oracle_value == 0.0 && text_has_nonzero_digit_prefix(text, oracle_len)) {
     if (r.status != RYU_PARSE_UNDERFLOW && bits_from_double(r.value) != bits_from_double(oracle_value)) {
       stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[%s] underflow mismatch text='%s' status=%d val=0x%016llx oracle=0x%016llx\n",
+                tag,
+                text,
+                (int)r.status,
+                (unsigned long long)bits_from_double(r.value),
+                (unsigned long long)bits_from_double(oracle_value));
+      }
       return 0;
     }
     return 1;
   }
 
+  if (allow_out_of_range && r.status == RYU_PARSE_OUT_OF_RANGE) {
+    return 1;
+  }
+
   if (!(r.status == RYU_PARSE_OK || r.status == RYU_PARSE_INEXACT)) {
     stats->failures += 1u;
+    if (stats->failures <= 20u) {
+      fprintf(stderr,
+              "[%s] status mismatch text='%s' status=%d oracle=0x%016llx\n",
+              tag,
+              text,
+              (int)r.status,
+              (unsigned long long)bits_from_double(oracle_value));
+    }
     return 0;
   }
 
@@ -633,7 +672,7 @@ static int run_scan_oracle_from_formats(const u64_vec* ds, int quick, oracle_sta
             continue;
           }
 
-          if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-format")) {
+          if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-format", 0)) {
             continue;
           }
 
@@ -673,9 +712,9 @@ static size_t append_u64_dec(char* out, uint64_t x) {
 static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int huge_scale) {
   size_t pos = 0u;
   unsigned lead_ws = (unsigned)(xorshift64(state) % 3u);
-  unsigned digits = (unsigned)(xorshift64(state) % (huge_scale ? 180u : 18u)) + 1u;
+  unsigned digits = (unsigned)(xorshift64(state) % (huge_scale ? 3600u : 18u)) + 1u;
   unsigned split = (unsigned)(xorshift64(state) % (uint64_t)(digits + 1u));
-  int exp = (int)(xorshift64(state) % (huge_scale ? 12001u : 39u)) - (huge_scale ? 6000 : 19);
+  int exp = (int)(xorshift64(state) % (huge_scale ? 20001u : 39u)) - (huge_scale ? 10000 : 19);
   unsigned i;
 
   if (cap < 16u) {
@@ -730,7 +769,7 @@ static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_sta
   uint64_t state = seed;
   size_t i;
   for (i = 0u; i < iters; ++i) {
-    char text[1024];
+    char text[8192];
     size_t text_len = build_random_decimal(text, sizeof(text), &state, huge_scale);
     double oracle_value;
     size_t oracle_len;
@@ -742,13 +781,19 @@ static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_sta
 
     if (!oracle_scan_text(text, text_len, &oracle_value, &oracle_len)) {
       ryu64_parse_result r = ryu64_from_decimal_full(text, text_len);
-      if (r.status != RYU_PARSE_INVALID) {
+      if (r.status != RYU_PARSE_INVALID && !(huge_scale && r.status == RYU_PARSE_OUT_OF_RANGE)) {
         stats->failures += 1u;
+        if (stats->failures <= 20u) {
+          fprintf(stderr,
+                  "[scan-fuzz] oracle rejected text='%s' parser-status=%d\n",
+                  text,
+                  (int)r.status);
+        }
       }
       continue;
     }
 
-    if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-fuzz")) {
+    if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-fuzz", huge_scale)) {
       continue;
     }
   }

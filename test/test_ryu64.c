@@ -710,6 +710,49 @@ static int run_parse_full_diff_vs_strtod(unsigned iters) {
   return 1;
 }
 
+static int check_parse_full_vs_strtod(const char* text, size_t len, const char* tag) {
+  ryu64_parse_result p = ryu64_from_decimal_full(text, len);
+  char* end = NULL;
+  double oracle = strtod(text, &end);
+
+  if (end == NULL || (size_t)(end - text) != len) {
+    fprintf(stderr, "strtod %s parse mismatch for '%s'\n", tag, text);
+    return 0;
+  }
+  if (p.parsed_len != len) {
+    fprintf(stderr, "full %s parsed_len mismatch for '%s'\n", tag, text);
+    return 0;
+  }
+  if (isinf(oracle)) {
+    if (p.status != RYU_PARSE_OVERFLOW || !isinf(p.value) || signbit(p.value) != signbit(oracle)) {
+      fprintf(stderr, "full %s overflow mismatch for '%s' status=%d\n", tag, text, (int)p.status);
+      return 0;
+    }
+    return 1;
+  }
+  if (oracle == 0.0 && text_has_nonzero_digit(text)) {
+    if (p.status != RYU_PARSE_UNDERFLOW && bits_from_double(p.value) != bits_from_double(oracle)) {
+      fprintf(stderr, "full %s underflow mismatch for '%s' status=%d\n", tag, text, (int)p.status);
+      return 0;
+    }
+    return 1;
+  }
+  if (!parse_status_success(p.status)) {
+    fprintf(stderr, "full %s unexpected status for '%s': %d\n", tag, text, (int)p.status);
+    return 0;
+  }
+  if (bits_from_double(p.value) != bits_from_double(oracle)) {
+    fprintf(stderr,
+            "full %s value mismatch for '%s': full=0x%016llx oracle=0x%016llx\n",
+            tag,
+            text,
+            (unsigned long long)bits_from_double(p.value),
+            (unsigned long long)bits_from_double(oracle));
+    return 0;
+  }
+  return 1;
+}
+
 static int run_parse_full_boundary_vs_strtod(void) {
   static const char* cases[] = {
       "1e20",
@@ -737,46 +780,55 @@ static int run_parse_full_boundary_vs_strtod(void) {
   };
   size_t i;
   for (i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-    const char* text = cases[i];
-    size_t len = strlen(text);
-    ryu64_parse_result p = ryu64_from_decimal_full(text, len);
-    char* end = NULL;
-    double oracle = strtod(text, &end);
-    if (end == NULL || (size_t)(end - text) != len) {
-      fprintf(stderr, "strtod boundary parse mismatch for '%s'\n", text);
-      return 0;
-    }
-    if (p.parsed_len != len) {
-      fprintf(stderr, "full boundary parsed_len mismatch for '%s'\n", text);
-      return 0;
-    }
-    if (isinf(oracle)) {
-      if (p.status != RYU_PARSE_OVERFLOW || !isinf(p.value) || signbit(p.value) != signbit(oracle)) {
-        fprintf(stderr, "full boundary overflow mismatch for '%s' status=%d\n", text, (int)p.status);
-        return 0;
-      }
-      continue;
-    }
-    if (oracle == 0.0 && text_has_nonzero_digit(text)) {
-      if (p.status != RYU_PARSE_UNDERFLOW && bits_from_double(p.value) != bits_from_double(oracle)) {
-        fprintf(stderr, "full boundary underflow mismatch for '%s' status=%d\n", text, (int)p.status);
-        return 0;
-      }
-      continue;
-    }
-    if (!parse_status_success(p.status)) {
-      fprintf(stderr, "full boundary unexpected status for '%s': %d\n", text, (int)p.status);
-      return 0;
-    }
-    if (bits_from_double(p.value) != bits_from_double(oracle)) {
-      fprintf(stderr,
-              "full boundary value mismatch for '%s': full=0x%016llx oracle=0x%016llx\n",
-              text,
-              (unsigned long long)bits_from_double(p.value),
-              (unsigned long long)bits_from_double(oracle));
+    if (!check_parse_full_vs_strtod(cases[i], strlen(cases[i]), "boundary")) {
       return 0;
     }
   }
+  return 1;
+}
+
+static int run_parse_full_long_truncated_vs_strtod(void) {
+  char text_a[4096];
+  char text_b[4096];
+  char text_c[4096];
+  size_t i = 0u;
+  size_t len;
+
+  text_a[i++] = '1';
+  while (i < 3000u) {
+    text_a[i++] = '0';
+  }
+  memcpy(text_a + i, "e-2999", 7u);
+  len = i + 6u;
+  if (!check_parse_full_vs_strtod(text_a, len, "long-trunc-a")) {
+    return 0;
+  }
+
+  i = 0u;
+  text_b[i++] = '1';
+  while (i < 3000u) {
+    text_b[i++] = '0';
+  }
+  text_b[i++] = '1';
+  memcpy(text_b + i, "e-3000", 7u);
+  len = i + 6u;
+  if (!check_parse_full_vs_strtod(text_b, len, "long-trunc-b")) {
+    return 0;
+  }
+
+  i = 0u;
+  text_c[i++] = '-';
+  text_c[i++] = '1';
+  while (i < 3001u) {
+    text_c[i++] = '0';
+  }
+  text_c[i++] = '1';
+  memcpy(text_c + i, "e-3001", 7u);
+  len = i + 6u;
+  if (!check_parse_full_vs_strtod(text_c, len, "long-trunc-c")) {
+    return 0;
+  }
+
   return 1;
 }
 #endif
@@ -809,6 +861,9 @@ int main(void) {
     return 1;
   }
   if (!run_parse_full_boundary_vs_strtod()) {
+    return 1;
+  }
+  if (!run_parse_full_long_truncated_vs_strtod()) {
     return 1;
   }
 #endif

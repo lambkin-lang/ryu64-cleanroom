@@ -76,6 +76,10 @@ The following were not used before implementation:
 - fixed-width fast path for non-truncated significands (`<=19` digits) in exponent range `[-38, 38]`,
 - positive exponent fixed-width path uses local 192-bit integer arithmetic + nearest-even rounding,
 - negative exponent fixed-width path uses ratio arithmetic with bounded `10^k` denominators in `uint128`,
+- when lexical significand accumulation truncates (capacity exceeded), parser now forms a decimal interval from kept digits:
+  - lower bound: kept prefix scaled by dropped-digit count,
+  - upper bound: `(kept + 1)` scaled by dropped-digit count,
+  - returns a rounded result only when both bounds map to the same binary64 output,
 - falls back to bigint conversion for wider inputs.
 
 ### Parse table provenance (`/src/ryu64_parse_tables.c`)
@@ -112,7 +116,7 @@ These verify non-oracle sources compile in freestanding/no-libc configurations.
 - nextafter neighbors around `2^e` (`e=-1074..1023`),
 - nextafter neighbors around `10^k` (`k=-323..308`),
 - crafted literal and bit-pattern buckets,
-- randomized bounded and wide fuzzing.
+- randomized bounded and wide fuzzing (wide mode includes very long decimal texts that cross bigint accumulation capacity).
 
 ## Freeze and Post-Freeze Policy
 

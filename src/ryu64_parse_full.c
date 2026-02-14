@@ -33,7 +33,9 @@ typedef struct {
   int saw_any_digit;
   int saw_nonzero;
   int truncated;
+  int dropped_nonzero;
   long long sig_digits;
+  long long dropped_digits;
   long long exp10;
   size_t parsed_len;
   ryu_bigint sig;
@@ -44,6 +46,12 @@ typedef struct {
   uint64_t mid;
   uint64_t lo;
 } ryu_u192;
+
+static ryu_parse_status ryu_convert_ratio_to_double(
+    int negative,
+    const ryu_bigint* num,
+    const ryu_bigint* den,
+    double* out_value);
 
 static int ryu_u192_is_zero(const ryu_u192* v) {
   return v->hi == 0u && v->mid == 0u && v->lo == 0u;
@@ -340,13 +348,207 @@ static ryu64_parse_result ryu_parse_zero_result(int negative, size_t parsed_len)
   return ryu_parse_result_make(RYU_PARSE_OK, ryu_double_from_bits_local(bits), parsed_len);
 }
 
-static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
-  if (!p->truncated) {
-    if (!ryu_bigint_mul_small(&p->sig, 10u)) {
-      p->truncated = 1;
-    } else if (!ryu_bigint_add_small(&p->sig, (uint32_t)digit)) {
-      p->truncated = 1;
+static long long ryu_add_ll_saturate(long long a, long long b) {
+  if (b > 0 && a > (long long)INT64_MAX - b) {
+    return (long long)INT64_MAX;
+  }
+  if (b < 0 && a < (long long)INT64_MIN - b) {
+    return (long long)INT64_MIN;
+  }
+  return a + b;
+}
+
+static uint64_t ryu_bits_from_double_local(double x) {
+  uint64_t bits;
+  memcpy(&bits, &x, sizeof(bits));
+  return bits;
+}
+
+static int ryu_status_is_value_or_range(ryu_parse_status st) {
+  return st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT || st == RYU_PARSE_OVERFLOW || st == RYU_PARSE_UNDERFLOW;
+}
+
+static uint64_t ryu_status_to_bits(ryu_parse_status st, double value, int negative) {
+  if (st == RYU_PARSE_OVERFLOW) {
+    uint64_t bits = UINT64_C(0x7ff0000000000000);
+    if (negative) {
+      bits |= UINT64_C(1) << 63u;
     }
+    return bits;
+  }
+  if (st == RYU_PARSE_UNDERFLOW) {
+    return negative ? UINT64_C(0x8000000000000000) : UINT64_C(0);
+  }
+  return ryu_bits_from_double_local(value);
+}
+
+static int ryu_bigint_div10_exact(ryu_bigint* a) {
+  uint64_t carry = 0u;
+  size_t idx;
+
+  if (a->len == 0u) {
+    return 0;
+  }
+  for (idx = a->len; idx > 0u; --idx) {
+    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
+    a->limb[idx - 1u] = (uint32_t)(cur / UINT64_C(10));
+    carry = cur % UINT64_C(10);
+  }
+  while (a->len > 0u && a->limb[a->len - 1u] == 0u) {
+    a->len -= 1u;
+  }
+  return carry == 0u;
+}
+
+static ryu64_parse_result ryu_result_from_convert_status(
+    ryu_parse_status st,
+    int negative,
+    size_t parsed_len,
+    double value) {
+  if (st == RYU_PARSE_OVERFLOW) {
+    return ryu_parse_overflow_result(negative, parsed_len);
+  }
+  if (st == RYU_PARSE_UNDERFLOW) {
+    return ryu_parse_underflow_result(negative, parsed_len);
+  }
+  if (st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT) {
+    return ryu_parse_result_make(st, value, parsed_len);
+  }
+  return ryu_parse_result_make(st, 0.0, parsed_len);
+}
+
+static ryu_parse_status ryu_convert_decimal_bigint_to_double(
+    int negative,
+    const ryu_bigint* sig,
+    long long sig_digits,
+    long long exp10,
+    double* out_value) {
+  long long dec_exp10;
+  ryu_bigint num;
+  ryu_bigint den;
+
+  if (sig_digits <= 0) {
+    return RYU_PARSE_INVALID;
+  }
+
+  dec_exp10 = ryu_add_ll_saturate(sig_digits - 1, exp10);
+  if (dec_exp10 > 309) {
+    return RYU_PARSE_OVERFLOW;
+  }
+  if (dec_exp10 < -325) {
+    return RYU_PARSE_UNDERFLOW;
+  }
+
+  ryu_bigint_copy(&num, sig);
+
+  while (exp10 < 0 && num.len != 0u && (num.limb[0] % 10u) == 0u) {
+    if (!ryu_bigint_div10_exact(&num)) {
+      break;
+    }
+    exp10 += 1;
+  }
+
+  ryu_bigint_from_u64(&den, UINT64_C(1));
+
+  if (exp10 >= 0) {
+    if (exp10 > 1000000) {
+      return RYU_PARSE_OVERFLOW;
+    }
+    if (!ryu_bigint_mul_pow10(&num, (unsigned)exp10)) {
+      return RYU_PARSE_OVERFLOW;
+    }
+  } else {
+    long long abs_exp10 = -exp10;
+    if (abs_exp10 > 1000000) {
+      return RYU_PARSE_UNDERFLOW;
+    }
+    if (!ryu_bigint_mul_pow10(&den, (unsigned)abs_exp10)) {
+      if (dec_exp10 < -325) {
+        return RYU_PARSE_UNDERFLOW;
+      }
+      return RYU_PARSE_OUT_OF_RANGE;
+    }
+  }
+
+  return ryu_convert_ratio_to_double(negative, &num, &den, out_value);
+}
+
+static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p) {
+  long long kept_digits;
+  long long exp10_adj;
+  ryu_parse_status st_lo;
+  double lo_value = 0.0;
+
+  kept_digits = p->sig_digits - p->dropped_digits;
+  if (kept_digits <= 0) {
+    return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
+  }
+  exp10_adj = ryu_add_ll_saturate(p->exp10, p->dropped_digits);
+
+  st_lo = ryu_convert_decimal_bigint_to_double(p->negative, &p->sig, kept_digits, exp10_adj, &lo_value);
+  if (!p->dropped_nonzero) {
+    return ryu_result_from_convert_status(st_lo, p->negative, p->parsed_len, lo_value);
+  }
+  if ((st_lo == RYU_PARSE_OK || st_lo == RYU_PARSE_INEXACT) && exp10_adj <= -350) {
+    return ryu_parse_result_make(RYU_PARSE_INEXACT, lo_value, p->parsed_len);
+  }
+
+  {
+    ryu_bigint upper_sig;
+    long long upper_digits;
+    ryu_parse_status st_hi;
+    double hi_value = 0.0;
+    uint64_t lo_bits;
+    uint64_t hi_bits;
+    ryu_parse_status merged_status;
+
+    ryu_bigint_copy(&upper_sig, &p->sig);
+    if (!ryu_bigint_add_small(&upper_sig, 1u)) {
+      return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
+    }
+    upper_digits = (long long)ryu_bigint_decimal_len(&upper_sig);
+    st_hi = ryu_convert_decimal_bigint_to_double(p->negative, &upper_sig, upper_digits, exp10_adj, &hi_value);
+
+    if (!ryu_status_is_value_or_range(st_lo) || !ryu_status_is_value_or_range(st_hi)) {
+      return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
+    }
+
+    lo_bits = ryu_status_to_bits(st_lo, lo_value, p->negative);
+    hi_bits = ryu_status_to_bits(st_hi, hi_value, p->negative);
+    if (lo_bits != hi_bits) {
+      return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p->parsed_len);
+    }
+
+    if (st_lo == RYU_PARSE_OVERFLOW || st_hi == RYU_PARSE_OVERFLOW) {
+      return ryu_parse_overflow_result(p->negative, p->parsed_len);
+    }
+    if (st_lo == RYU_PARSE_UNDERFLOW || st_hi == RYU_PARSE_UNDERFLOW) {
+      return ryu_parse_underflow_result(p->negative, p->parsed_len);
+    }
+
+    merged_status = (st_lo == RYU_PARSE_INEXACT || st_hi == RYU_PARSE_INEXACT) ? RYU_PARSE_INEXACT : RYU_PARSE_OK;
+    return ryu_parse_result_make(merged_status, lo_value, p->parsed_len);
+  }
+}
+
+static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
+  ryu_bigint prev;
+
+  if (p->truncated) {
+    if (p->dropped_digits < (long long)INT64_MAX) {
+      p->dropped_digits += 1;
+    }
+    if (digit != 0u) {
+      p->dropped_nonzero = 1;
+    }
+    return 1;
+  }
+  ryu_bigint_copy(&prev, &p->sig);
+  if (!ryu_bigint_mul_small(&p->sig, 10u) || !ryu_bigint_add_small(&p->sig, (uint32_t)digit)) {
+    ryu_bigint_copy(&p->sig, &prev);
+    p->truncated = 1;
+    p->dropped_digits = 1;
+    p->dropped_nonzero = (digit != 0u);
   }
   return 1;
 }
@@ -360,7 +562,9 @@ static ryu_parse_status ryu_parse_full_decimal_lex(const char* s, size_t n, ryu_
   out->saw_any_digit = 0;
   out->saw_nonzero = 0;
   out->truncated = 0;
+  out->dropped_nonzero = 0;
   out->sig_digits = 0;
+  out->dropped_digits = 0;
   out->exp10 = 0;
   out->parsed_len = 0u;
   ryu_bigint_zero(&out->sig);
@@ -742,8 +946,6 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
   ryu_full_parsed p;
   ryu_parse_status st;
   long long dec_exp10;
-  ryu_bigint num;
-  ryu_bigint den;
   double value = 0.0;
 
   if (s == NULL) {
@@ -813,53 +1015,20 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
     }
   }
 
-  dec_exp10 = (p.sig_digits - 1) + p.exp10;
+  dec_exp10 = ryu_add_ll_saturate(p.sig_digits - 1, p.exp10);
   if (dec_exp10 > 309) {
     return ryu_parse_overflow_result(p.negative, p.parsed_len);
   }
-  if (dec_exp10 < -400) {
+  if (dec_exp10 < -325) {
     return ryu_parse_underflow_result(p.negative, p.parsed_len);
   }
 
   if (p.truncated) {
-    return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p.parsed_len);
+    return ryu_resolve_truncated_decimal(&p);
   }
 
-  ryu_bigint_copy(&num, &p.sig);
-  ryu_bigint_from_u64(&den, UINT64_C(1));
-
-  if (p.exp10 >= 0) {
-    if (p.exp10 > 1000000) {
-      return ryu_parse_overflow_result(p.negative, p.parsed_len);
-    }
-    if (!ryu_bigint_mul_pow10(&num, (unsigned)p.exp10)) {
-      return ryu_parse_overflow_result(p.negative, p.parsed_len);
-    }
-  } else {
-    long long abs_exp10 = -p.exp10;
-    if (abs_exp10 > 1000000) {
-      return ryu_parse_underflow_result(p.negative, p.parsed_len);
-    }
-    if (!ryu_bigint_mul_pow10(&den, (unsigned)abs_exp10)) {
-      if (dec_exp10 < -350) {
-        return ryu_parse_underflow_result(p.negative, p.parsed_len);
-      }
-      return ryu_parse_result_make(RYU_PARSE_OUT_OF_RANGE, 0.0, p.parsed_len);
-    }
-  }
-
-  st = ryu_convert_ratio_to_double(p.negative, &num, &den, &value);
-  if (st == RYU_PARSE_OVERFLOW) {
-    return ryu_parse_overflow_result(p.negative, p.parsed_len);
-  }
-  if (st == RYU_PARSE_UNDERFLOW) {
-    return ryu_parse_underflow_result(p.negative, p.parsed_len);
-  }
-  if (st != RYU_PARSE_OK && st != RYU_PARSE_INEXACT) {
-    return ryu_parse_result_make(st, 0.0, p.parsed_len);
-  }
-
-  return ryu_parse_result_make(st, value, p.parsed_len);
+  st = ryu_convert_decimal_bigint_to_double(p.negative, &p.sig, p.sig_digits, p.exp10, &value);
+  return ryu_result_from_convert_status(st, p.negative, p.parsed_len, value);
 }
 
 #else
