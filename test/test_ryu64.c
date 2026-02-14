@@ -372,6 +372,259 @@ static int run_9sig_smoke(unsigned iters) {
 }
 
 #if defined(RYU_ENABLE_LIBC_ORACLE)
+static const uint64_t kPow10U64[20] = {
+    UINT64_C(1),
+    UINT64_C(10),
+    UINT64_C(100),
+    UINT64_C(1000),
+    UINT64_C(10000),
+    UINT64_C(100000),
+    UINT64_C(1000000),
+    UINT64_C(10000000),
+    UINT64_C(100000000),
+    UINT64_C(1000000000),
+    UINT64_C(10000000000),
+    UINT64_C(100000000000),
+    UINT64_C(1000000000000),
+    UINT64_C(10000000000000),
+    UINT64_C(100000000000000),
+    UINT64_C(1000000000000000),
+    UINT64_C(10000000000000000),
+    UINT64_C(100000000000000000),
+    UINT64_C(1000000000000000000),
+    UINT64_C(10000000000000000000),
+};
+
+static size_t append_u64_dec_local(char* out, uint64_t x) {
+  char rev[32];
+  size_t n = 0u;
+  size_t i;
+  if (x == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (x != 0u) {
+    rev[n++] = (char)('0' + (x % UINT64_C(10)));
+    x /= UINT64_C(10);
+  }
+  for (i = 0u; i < n; ++i) {
+    out[i] = rev[n - 1u - i];
+  }
+  return n;
+}
+
+static int parse_shortest_components(const char* s, uint64_t* out_sig, int* out_exp10, unsigned* out_digits) {
+  char digits[64];
+  size_t i = 0u;
+  unsigned dcount = 0u;
+  unsigned frac_digits = 0u;
+  int seen_dot = 0;
+  int exp_sign = 1;
+  int exp_part = 0;
+  size_t first;
+  size_t last;
+  uint64_t sig = 0u;
+  size_t j;
+
+  if (s[i] == '+' || s[i] == '-') {
+    i += 1u;
+  }
+  if (s[i] == '\0') {
+    return 0;
+  }
+
+  while (s[i] != '\0' && s[i] != 'e' && s[i] != 'E') {
+    char c = s[i];
+    if (c == '.') {
+      if (seen_dot) {
+        return 0;
+      }
+      seen_dot = 1;
+    } else if (c >= '0' && c <= '9') {
+      if (dcount >= sizeof(digits)) {
+        return 0;
+      }
+      digits[dcount++] = c;
+      if (seen_dot) {
+        frac_digits += 1u;
+      }
+    } else {
+      return 0;
+    }
+    i += 1u;
+  }
+
+  if (dcount == 0u) {
+    return 0;
+  }
+
+  if (s[i] == 'e' || s[i] == 'E') {
+    i += 1u;
+    if (s[i] == '+' || s[i] == '-') {
+      exp_sign = (s[i] == '-') ? -1 : 1;
+      i += 1u;
+    }
+    if (s[i] < '0' || s[i] > '9') {
+      return 0;
+    }
+    while (s[i] >= '0' && s[i] <= '9') {
+      if (exp_part < 100000000) {
+        exp_part = exp_part * 10 + (int)(s[i] - '0');
+      }
+      i += 1u;
+    }
+  }
+
+  if (s[i] != '\0') {
+    return 0;
+  }
+
+  first = 0u;
+  while (first < dcount && digits[first] == '0') {
+    first += 1u;
+  }
+  if (first == dcount) {
+    *out_sig = 0u;
+    *out_exp10 = 0;
+    *out_digits = 1u;
+    return 1;
+  }
+
+  last = dcount;
+  *out_exp10 = exp_sign * exp_part - (int)frac_digits;
+  while (last > first + 1u && digits[last - 1u] == '0') {
+    last -= 1u;
+    *out_exp10 += 1;
+  }
+
+  for (j = first; j < last; ++j) {
+    uint64_t prev = sig;
+    sig = sig * UINT64_C(10) + (uint64_t)(digits[j] - '0');
+    if (sig < prev) {
+      return 0;
+    }
+  }
+
+  *out_sig = sig;
+  *out_digits = (unsigned)(last - first);
+  return 1;
+}
+
+static int build_shorter_candidate(
+    char* out,
+    size_t out_cap,
+    int negative,
+    uint64_t sig,
+    unsigned digits,
+    int exp10) {
+  char sig_text[32];
+  size_t pos = 0u;
+  size_t sig_len = append_u64_dec_local(sig_text, sig);
+  int e = exp10;
+
+  if (digits == 0u || sig_len != (size_t)digits) {
+    return 0;
+  }
+  if (negative) {
+    if (pos >= out_cap) {
+      return 0;
+    }
+    out[pos++] = '-';
+  }
+  if (pos >= out_cap) {
+    return 0;
+  }
+  out[pos++] = sig_text[0];
+  if (digits > 1u) {
+    if (pos + 1u + (size_t)(digits - 1u) >= out_cap) {
+      return 0;
+    }
+    out[pos++] = '.';
+    memcpy(out + pos, sig_text + 1, (size_t)(digits - 1u));
+    pos += (size_t)(digits - 1u);
+  }
+  if (pos + 2u >= out_cap) {
+    return 0;
+  }
+  out[pos++] = 'e';
+  if (e < 0) {
+    out[pos++] = '-';
+    e = -e;
+  } else {
+    out[pos++] = '+';
+  }
+  if (pos >= out_cap) {
+    return 0;
+  }
+  pos += append_u64_dec_local(out + pos, (uint64_t)e);
+  if (pos >= out_cap) {
+    return 0;
+  }
+  out[pos] = '\0';
+  return 1;
+}
+
+static int verify_shortest_minimality(uint64_t bits, const char* shortest) {
+  const int kDeltaRadius = 8;
+  const uint64_t kAbsMask = UINT64_C(0x7fffffffffffffff);
+  int negative = (bits >> 63u) != 0u;
+  uint64_t abs_bits = bits & kAbsMask;
+  uint64_t sig = 0u;
+  int exp10 = 0;
+  unsigned digits = 0u;
+  unsigned q;
+
+  if (abs_bits == 0u || ((abs_bits >> 52u) & 0x7ffu) == 0x7ffu) {
+    return 1;
+  }
+  if (!parse_shortest_components(shortest, &sig, &exp10, &digits)) {
+    fprintf(stderr, "shortest parse failure for minimality str='%s'\n", shortest);
+    return 0;
+  }
+  if (sig == 0u || digits <= 1u || digits >= 20u) {
+    return 1;
+  }
+
+  for (q = 1u; q < digits; ++q) {
+    unsigned cut = digits - q;
+    uint64_t cut_pow10 = kPow10U64[cut];
+    uint64_t lo = (q == 1u) ? UINT64_C(1) : kPow10U64[q - 1u];
+    uint64_t hi = kPow10U64[q] - UINT64_C(1);
+    uint64_t base = sig / cut_pow10;
+    int cand_exp10 = exp10 + (int)cut;
+    int delta;
+
+    for (delta = -kDeltaRadius; delta <= kDeltaRadius; ++delta) {
+      int64_t cand_i = (int64_t)base + (int64_t)delta;
+      uint64_t cand_sig;
+      char cand_text[96];
+      char* end = NULL;
+      double parsed;
+      if (cand_i < (int64_t)lo || cand_i > (int64_t)hi) {
+        continue;
+      }
+      cand_sig = (uint64_t)cand_i;
+      if (q > 1u && (cand_sig % UINT64_C(10)) == 0u) {
+        continue;
+      }
+      if (!build_shorter_candidate(cand_text, sizeof(cand_text), negative, cand_sig, q, cand_exp10)) {
+        continue;
+      }
+      parsed = strtod(cand_text, &end);
+      if (end != NULL && *end == '\0' && bits_from_double(parsed) == bits) {
+        fprintf(stderr,
+                "shortest minimality violated bits=0x%016llx shortest='%s' shorter='%s'\n",
+                (unsigned long long)bits,
+                shortest,
+                cand_text);
+        return 0;
+      }
+    }
+  }
+
+  return 1;
+}
+
 static int run_roundtrip_edges(void) {
   const uint64_t edge_bits[] = {
       UINT64_C(0x0000000000000000),
@@ -424,6 +677,9 @@ static int run_roundtrip_edges(void) {
                 out);
         return 0;
       }
+      if (!verify_shortest_minimality(in_bits, out)) {
+        return 0;
+      }
     }
   }
 
@@ -470,6 +726,34 @@ static int run_roundtrip_random(unsigned iters) {
     }
   }
 
+  return 1;
+}
+
+static int run_shortest_minimality_random(unsigned iters) {
+  uint64_t state = UINT64_C(0x5bd1e9951234abcd);
+  unsigned checked = 0u;
+
+  while (checked < iters) {
+    uint64_t bits = xorshift64(&state);
+    uint64_t abs_bits = bits & UINT64_C(0x7fffffffffffffff);
+    double x;
+    char out[512];
+    size_t out_len = 0u;
+
+    if (abs_bits == 0u || ((abs_bits >> 52u) & 0x7ffu) == 0x7ffu) {
+      continue;
+    }
+
+    x = double_from_bits(bits);
+    if (ryu64_to_shortest(out, sizeof(out), x, &out_len) != RYU_OK) {
+      fprintf(stderr, "shortest minimality generation failed bits=0x%016llx\n", (unsigned long long)bits);
+      return 0;
+    }
+    if (!verify_shortest_minimality(bits, out)) {
+      return 0;
+    }
+    checked += 1u;
+  }
   return 1;
 }
 
@@ -540,6 +824,73 @@ static int run_printf_diff(unsigned iters) {
   }
 #else
   (void)iters;
+#endif
+  return 1;
+}
+
+static int run_printf_nan_sign_policy(void) {
+#if defined(RYU_TIER_FULL)
+  static const uint64_t nan_bits[] = {
+      UINT64_C(0x7ff8000000000000),
+      UINT64_C(0xfff8000000000000),
+      UINT64_C(0x7ff8000000000001),
+      UINT64_C(0xfff8000000000001),
+  };
+  static const int precisions[] = {-1, 0, 6};
+  static const ryu_fmt_kind kinds[] = {RYU_FMT_F, RYU_FMT_E, RYU_FMT_G};
+  size_t i;
+
+  for (i = 0u; i < sizeof(nan_bits) / sizeof(nan_bits[0]); ++i) {
+    double x = double_from_bits(nan_bits[i]);
+    size_t k;
+    for (k = 0u; k < sizeof(kinds) / sizeof(kinds[0]); ++k) {
+      size_t p;
+      for (p = 0u; p < sizeof(precisions) / sizeof(precisions[0]); ++p) {
+        int upper;
+        for (upper = 0; upper <= 1; ++upper) {
+          int alt;
+          for (alt = 0; alt <= 1; ++alt) {
+            int sign_mode;
+            for (sign_mode = 0; sign_mode < 3; ++sign_mode) {
+              ryu_printf_spec spec;
+              char out[64];
+              const char* expected = upper ? "NAN" : "nan";
+              size_t out_len = 0u;
+              ryu_status st;
+
+              spec.kind = kinds[k];
+              spec.precision = precisions[p];
+              spec.uppercase = upper;
+              spec.alternate_form = alt;
+              spec.always_sign = (sign_mode == 1);
+              spec.space_sign = (sign_mode == 2);
+
+              st = ryu64_to_printf(out, sizeof(out), x, &spec, &out_len);
+              if (st != RYU_OK) {
+                fprintf(stderr,
+                        "printf nan status mismatch bits=0x%016llx status=%d\n",
+                        (unsigned long long)nan_bits[i],
+                        (int)st);
+                return 0;
+              }
+              if (strcmp(out, expected) != 0 || out_len != 3u) {
+                fprintf(stderr,
+                        "printf nan text mismatch bits=0x%016llx kind=%d prec=%d upper=%d alt=%d sign_mode=%d out='%s'\n",
+                        (unsigned long long)nan_bits[i],
+                        (int)spec.kind,
+                        spec.precision,
+                        spec.uppercase,
+                        spec.alternate_form,
+                        sign_mode,
+                        out);
+                return 0;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 #endif
   return 1;
 }
@@ -987,7 +1338,13 @@ int main(void) {
   if (!run_roundtrip_random(20000u)) {
     return 1;
   }
+  if (!run_shortest_minimality_random(5000u)) {
+    return 1;
+  }
   if (!run_printf_diff(3000u)) {
+    return 1;
+  }
+  if (!run_printf_nan_sign_policy()) {
     return 1;
   }
   if (!run_parse_diff_vs_strtod(20000u)) {

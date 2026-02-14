@@ -33,7 +33,14 @@
 #define RYU_BIGINT_BASE 1000000000u
 #define RYU_BIGINT_BASE_DIGITS 9u
 #ifndef RYU_BIGINT_MAX_LIMBS
-#define RYU_BIGINT_MAX_LIMBS 1024u
+#if defined(RYU_TIER_TINY) || defined(__wasm32__)
+#define RYU_BIGINT_MAX_LIMBS 256u
+#else
+#define RYU_BIGINT_MAX_LIMBS 512u
+#endif
+#endif
+#if (RYU_BIGINT_MAX_LIMBS < 96u)
+#error "RYU_BIGINT_MAX_LIMBS is too small for required binary64 formatting coverage"
 #endif
 #define RYU_LOCAL_BUF_CAP 4096u
 #define RYU_MAX_PRINTF_PRECISION 1000

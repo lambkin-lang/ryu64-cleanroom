@@ -586,22 +586,20 @@ static int ryu_midpoint(
     ryu_bigint* out_num,
     unsigned* out_den) {
   unsigned k = (a_den > b_den) ? a_den : b_den;
-  ryu_bigint ta;
-  ryu_bigint tb;
+  ryu_bigint tmp;
 
-  ryu_bigint_copy(&ta, a_num);
-  ryu_bigint_copy(&tb, b_num);
+  ryu_bigint_copy(out_num, a_num);
+  ryu_bigint_copy(&tmp, b_num);
 
-  if (k > a_den && !ryu_bigint_shl_bits(&ta, k - a_den)) {
+  if (k > a_den && !ryu_bigint_shl_bits(out_num, k - a_den)) {
     return 0;
   }
-  if (k > b_den && !ryu_bigint_shl_bits(&tb, k - b_den)) {
+  if (k > b_den && !ryu_bigint_shl_bits(&tmp, k - b_den)) {
     return 0;
   }
-  if (!ryu_bigint_add(&ta, &tb)) {
+  if (!ryu_bigint_add(out_num, &tmp)) {
     return 0;
   }
-  ryu_bigint_copy(out_num, &ta);
   *out_den = k + 1u;
   return 1;
 }
@@ -641,13 +639,9 @@ int ryu_exact_decimal_from_bits(uint64_t abs_bits, ryu_decimal_exact* out) {
 
 int ryu_decimal_interval_from_bits(uint64_t abs_bits, ryu_decimal_interval* out) {
   ryu_bigint x_num;
-  ryu_bigint p_num;
-  ryu_bigint n_num;
-  ryu_bigint low_num;
-  ryu_bigint high_num;
+  ryu_bigint neighbor_num;
   unsigned x_den;
-  unsigned p_den;
-  unsigned n_den;
+  unsigned neighbor_den;
   unsigned low_den;
   unsigned high_den;
   unsigned q;
@@ -678,23 +672,22 @@ int ryu_decimal_interval_from_bits(uint64_t abs_bits, ryu_decimal_interval* out)
   if (!ryu_rational_from_bits(abs_bits, &x_num, &x_den)) {
     return 0;
   }
-  if (!ryu_rational_from_bits(abs_bits - UINT64_C(1), &p_num, &p_den)) {
-    return 0;
-  }
-  if (!ryu_rational_from_bits(abs_bits + UINT64_C(1), &n_num, &n_den)) {
+  if (!ryu_rational_from_bits(abs_bits - UINT64_C(1), &neighbor_num, &neighbor_den)) {
     return 0;
   }
 
-  if (!ryu_midpoint(&p_num, p_den, &x_num, x_den, &low_num, &low_den)) {
+  if (!ryu_midpoint(&neighbor_num, neighbor_den, &x_num, x_den, &out->low, &low_den)) {
     return 0;
   }
-  if (!ryu_midpoint(&x_num, x_den, &n_num, n_den, &high_num, &high_den)) {
+  if (!ryu_rational_from_bits(abs_bits + UINT64_C(1), &neighbor_num, &neighbor_den)) {
+    return 0;
+  }
+  if (!ryu_midpoint(&x_num, x_den, &neighbor_num, neighbor_den, &out->high, &high_den)) {
     return 0;
   }
 
   q = (low_den > high_den) ? low_den : high_den;
 
-  ryu_bigint_copy(&out->low, &low_num);
   if (!ryu_bigint_mul_pow5(&out->low, low_den)) {
     return 0;
   }
@@ -702,7 +695,6 @@ int ryu_decimal_interval_from_bits(uint64_t abs_bits, ryu_decimal_interval* out)
     return 0;
   }
 
-  ryu_bigint_copy(&out->high, &high_num);
   if (!ryu_bigint_mul_pow5(&out->high, high_den)) {
     return 0;
   }
@@ -744,21 +736,18 @@ int ryu_choose_shortest_digits(
 
   t = (int)ryu_bigint_decimal_len(&interval.high);
   for (; t >= 0; --t) {
-    ryu_bigint floor_low;
-    ryu_bigint floor_high;
     ryu_bigint n_min;
     ryu_bigint n_max;
     int low_rem_zero = 0;
     int high_rem_zero = 0;
 
-    if (!ryu_bigint_div_pow10_floor(&interval.low, (unsigned)t, &floor_low, &low_rem_zero)) {
+    if (!ryu_bigint_div_pow10_floor(&interval.low, (unsigned)t, &n_min, &low_rem_zero)) {
       return 0;
     }
-    if (!ryu_bigint_div_pow10_floor(&interval.high, (unsigned)t, &floor_high, &high_rem_zero)) {
+    if (!ryu_bigint_div_pow10_floor(&interval.high, (unsigned)t, &n_max, &high_rem_zero)) {
       return 0;
     }
 
-    ryu_bigint_copy(&n_min, &floor_low);
     if (!low_rem_zero) {
       if (!ryu_bigint_add_small(&n_min, 1u)) {
         return 0;
@@ -770,7 +759,6 @@ int ryu_choose_shortest_digits(
       }
     }
 
-    ryu_bigint_copy(&n_max, &floor_high);
     if (!interval.high_closed && high_rem_zero) {
       if (ryu_bigint_is_zero(&n_max)) {
         continue;

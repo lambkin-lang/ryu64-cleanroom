@@ -15,6 +15,10 @@
   - `ryu64_from_decimal_full(...)` (bigint-backed when `RYU64_ENABLE_PARSE_BIGINT` is enabled)
 
 Behavior includes finite values, signed zero, infinities, and NaN.
+- `ryu64_to_printf` emits unsigned NaN text (`nan`/`NAN`): NaN sign and `+`/space sign flags are ignored.
+- Design choice:
+  - `ryu64_to_shortest` and `ryu64_to_9sig` preserve sign (including signed NaN) as information-preserving conversions.
+  - `ryu64_to_printf` suppresses NaN sign as a formatting portability policy because C `printf` NaN sign behavior is implementation-defined.
 
 ## Build tiers
 
@@ -41,7 +45,8 @@ Parser tier contract:
   - uses a fixed-width integer fast path for non-truncated mantissas (`<=19` significant digits) with decimal exponent in `[-38, 38]`
   - bigint conversion decomposes `10^k` as `5^k * 2^k` (tracked with a binary exponent adjustment) to reduce intermediate growth and avoid avoidable range fallthrough
   - uses a shared bigint workspace to cap nested-call stack growth in the fallback path
-  - lexical significand accumulation stores up to `RYU_BIGINT_MAX_LIMBS * 9` decimal digits (`9216` with current defaults) before entering interval truncation logic
+  - lexical significand accumulation uses in-place `*10 + digit` updates (no per-digit bigint snapshot copy)
+  - lexical significand accumulation stores up to `RYU_BIGINT_MAX_LIMBS * 9` decimal digits before entering interval truncation logic
   - for mantissas that exceed bigint capacity, uses a conservative truncated-interval resolver:
     - computes lower/upper decimal bounds from kept digits
     - returns a value only when both bounds map to the same binary64 result
@@ -52,13 +57,27 @@ Parser tier contract:
 
 Bigint capacity and stack tuning:
 
-- `RYU_BIGINT_MAX_LIMBS` defaults to `1024` (compile-time macro in internal headers).
-- Full parser stack use is approximately:
-  - `(7 * sizeof(ryu_bigint))` for parser state + shared workspace (`~29 KiB` at 1024 limbs, before normal call-frame overhead).
-  - measured with `clang -O2 -fstack-usage` on macOS: `ryu64_from_decimal_full` uses `28944` bytes at default limb count.
+- `RYU_BIGINT_MAX_LIMBS` defaults are tier/target-aware:
+  - `512` for native non-tiny builds.
+  - `256` for `RYU_TIER_TINY` and `wasm32` builds.
+- Minimum supported value is `96` (compile-time guard).
+- Per-tier stack budget (measured with `-O2 -fstack-usage`):
+  - TINY / wasm32 (`RYU_TIER_TINY`, limbs=256, no parse-bigint workspace):
+    - `ryu_choose_shortest_digits`: `4144` bytes
+    - `ryu_decimal_interval_from_bits`: `2064` bytes
+    - `ryu64_from_decimal_full` (tiny fallback build): `0` bytes
+  - FULL / wasm32 (`RYU_TIER_FULL`, limbs=256, parse-bigint enabled):
+    - `ryu64_from_decimal_full`: `7280` bytes
+    - `ryu_convert_decimal_bigint_to_double`: `32` bytes
+    - `ryu_choose_shortest_digits`: `4144` bytes
+  - FULL / native (`RYU_TIER_FULL`, limbs=512, parse-bigint enabled):
+    - `ryu64_from_decimal_full`: `14560` bytes
+    - `ryu_convert_decimal_bigint_to_double`: `112` bytes
+    - `ryu_choose_shortest_digits`: `8384` bytes
+    - `ryu_decimal_interval_from_bits`: `4192` bytes
 - Lowering `RYU_BIGINT_MAX_LIMBS` reduces stack/object footprint, but also lowers long-mantissa coverage (more `RYU_PARSE_OUT_OF_RANGE` for very long inputs).
 - Override example:
-  - `make full CFLAGS_BASE='-std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude -DRYU_BIGINT_MAX_LIMBS=512u'`
+  - `make full CFLAGS_BASE='-std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude -DRYU_BIGINT_MAX_LIMBS=768u'`
 
 ## Build (macOS + GNU Make 3.81 compatible)
 
@@ -105,6 +124,10 @@ Oracle/benchmark program:
   - printing (`ryu64_to_printf`) vs `printf`/`snprintf`
   - scanning (`ryu64_from_decimal_tiny/full`) vs `scanf`/`sscanf`
   - shortest/9sig via `scanf` roundtrip checks
+  - shortest minimality checks (no shorter-significand candidate around each shortest result may round-trip to the same bits)
+- Oracle NaN strategy:
+  - generic printf differential skips NaN because libc NaN sign/spelling behavior is implementation-defined across platforms
+  - dedicated `printf-nan-policy` checks enforce this project's explicit NaN policy
 - It includes deterministic stress datasets and random fuzzing, and reports timing.
   - deterministic stress includes dense low/high subnormal windows and a broad deterministic subnormal scatter set
 - Non-oracle compile checks are provided via `nolibc-check-speed` and `nolibc-check-size`.

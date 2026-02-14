@@ -550,7 +550,44 @@ static ryu64_parse_result ryu_resolve_truncated_decimal(const ryu_full_parsed* p
   }
 }
 
-static int ryu_parse_append_digit(ryu_full_parsed* p, ryu_bigint* prev, unsigned digit) {
+static int ryu_bigint_mul10_add_digit(ryu_bigint* a, unsigned digit) {
+  uint64_t carry = (uint64_t)digit;
+  size_t i;
+
+  if (digit > 9u || a->len == 0u) {
+    return 0;
+  }
+
+  if (a->len == RYU_BIGINT_MAX_LIMBS) {
+    uint64_t probe = carry;
+    for (i = 0u; i < a->len; ++i) {
+      uint64_t v = (uint64_t)a->limb[i] * UINT64_C(10) + probe;
+      probe = v / (uint64_t)RYU_BIGINT_BASE;
+    }
+    if (probe != 0u) {
+      return 0;
+    }
+  }
+
+  for (i = 0u; i < a->len; ++i) {
+    uint64_t v = (uint64_t)a->limb[i] * UINT64_C(10) + carry;
+    a->limb[i] = (uint32_t)(v % (uint64_t)RYU_BIGINT_BASE);
+    carry = v / (uint64_t)RYU_BIGINT_BASE;
+  }
+
+  while (carry != 0u) {
+    if (a->len >= RYU_BIGINT_MAX_LIMBS) {
+      return 0;
+    }
+    a->limb[a->len] = (uint32_t)(carry % (uint64_t)RYU_BIGINT_BASE);
+    a->len += 1u;
+    carry /= (uint64_t)RYU_BIGINT_BASE;
+  }
+
+  return 1;
+}
+
+static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
 
   if (p->truncated) {
     if (p->dropped_digits < (long long)INT64_MAX) {
@@ -561,9 +598,7 @@ static int ryu_parse_append_digit(ryu_full_parsed* p, ryu_bigint* prev, unsigned
     }
     return 1;
   }
-  ryu_bigint_copy(prev, &p->sig);
-  if (!ryu_bigint_mul_small(&p->sig, 10u) || !ryu_bigint_add_small(&p->sig, (uint32_t)digit)) {
-    ryu_bigint_copy(&p->sig, prev);
+  if (!ryu_bigint_mul10_add_digit(&p->sig, digit)) {
     p->truncated = 1;
     p->dropped_digits = 1;
     p->dropped_nonzero = (digit != 0u);
@@ -574,8 +609,7 @@ static int ryu_parse_append_digit(ryu_full_parsed* p, ryu_bigint* prev, unsigned
 static ryu_parse_status ryu_parse_full_decimal_lex(
     const char* s,
     size_t n,
-    ryu_full_parsed* out,
-    ryu_parse_bigint_ws* ws) {
+    ryu_full_parsed* out) {
   size_t i = 0u;
   size_t end_pos;
 
@@ -641,7 +675,7 @@ static ryu_parse_status ryu_parse_full_decimal_lex(
     if (d != 0u || out->saw_nonzero) {
       out->saw_nonzero = 1;
       out->sig_digits += 1;
-      ryu_parse_append_digit(out, &ws->scratch3, d);
+      ryu_parse_append_digit(out, d);
     }
     i += 1u;
   }
@@ -655,7 +689,7 @@ static ryu_parse_status ryu_parse_full_decimal_lex(
       if (d != 0u || out->saw_nonzero) {
         out->saw_nonzero = 1;
         out->sig_digits += 1;
-        ryu_parse_append_digit(out, &ws->scratch3, d);
+        ryu_parse_append_digit(out, d);
       }
       i += 1u;
     }
@@ -1046,7 +1080,7 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
     }
   }
 
-  st = ryu_parse_full_decimal_lex(s, n, &p, &ws);
+  st = ryu_parse_full_decimal_lex(s, n, &p);
   if (st != RYU_PARSE_OK) {
     return ryu_parse_result_make(RYU_PARSE_INVALID, 0.0, 0u);
   }

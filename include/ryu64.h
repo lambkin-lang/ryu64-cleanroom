@@ -67,6 +67,11 @@ typedef struct {
  * - Otherwise emit a 9-significant-digit scientific form with nearest-even
  *   rounding.
  * - Not all values in capped form are guaranteed to round-trip.
+ *
+ * Sign/special-token policy:
+ * - `ryu64_to_shortest` and `ryu64_to_9sig` are information-preserving
+ *   converters and preserve the input sign bit for signed zero, infinities,
+ *   and NaN.
  */
 ryu_status ryu64_to_shortest(char* out, size_t out_cap, double x, size_t* out_len);
 ryu_status ryu64_to_9sig(char* out, size_t out_cap, double x, size_t* out_len);
@@ -89,6 +94,10 @@ typedef struct {
 /*
  * Printf-style conversion for binary64.
  * Requires builds with RYU_TIER_FULL.
+ * NaN formatting is unsigned ("nan"/"NAN"): sign bit and '+'/' ' flags are
+ * ignored for NaN tokens.
+ * This is an intentional formatting-layer portability choice because C `printf`
+ * NaN sign rendering is implementation-defined.
  */
 ryu_status ryu64_to_printf(
     char* out,
@@ -125,7 +134,8 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
  * - NaN payload syntax "nan(...)" is consumed when payload characters are
  *   ASCII [0-9A-Za-z_], but payload bits are not preserved in output; parser
  *   returns canonical quiet NaN (with sign if requested).
- * - Build macro RYU_BIGINT_MAX_LIMBS (default 1024 in internal headers)
+ * - Build macro RYU_BIGINT_MAX_LIMBS (defaults in internal headers are
+ *   tier/target-dependent: 512 native non-tiny, 256 tiny/wasm)
  *   controls bigint capacity, accepted long-mantissa coverage, and parser
  *   stack footprint.
  * - Without that macro, falls back to tiny parser coverage and may return

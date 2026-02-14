@@ -400,14 +400,18 @@ ryu_status ryu64_to_printf(
   abs_bits = fp.bits & UINT64_C(0x7fffffffffffffff);
 
   if (fp.is_nan) {
+    /*
+     * Printf-family NaN policy:
+     * emit unsigned nan/NAN and ignore sign flags for deterministic behavior.
+     */
     if (!ryu_write_special(
             out,
             out_cap,
-            fp.sign,
+            0,
             0,
             spec->uppercase,
-            spec->always_sign,
-            spec->space_sign,
+            0,
+            0,
             out_len)) {
       return RYU_BUFFER_TOO_SMALL;
     }

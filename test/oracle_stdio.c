@@ -96,8 +96,8 @@ static int vec_push(u64_vec* v, uint64_t bits) {
   return 1;
 }
 
-static int vec_push_if_finite_nonzero(u64_vec* v, double x) {
-  if (!isfinite(x) || x == 0.0) {
+static int vec_push_if_finite(u64_vec* v, double x) {
+  if (!isfinite(x)) {
     return 1;
   }
   return vec_push(v, bits_from_double(x));
@@ -111,22 +111,22 @@ static int add_boundary_neighbors(u64_vec* v, double x) {
   }
   prev = nextafter(x, 0.0);
   next = nextafter(x, INFINITY);
-  if (!vec_push_if_finite_nonzero(v, prev)) {
+  if (!vec_push_if_finite(v, prev)) {
     return 0;
   }
-  if (!vec_push_if_finite_nonzero(v, x)) {
+  if (!vec_push_if_finite(v, x)) {
     return 0;
   }
-  if (!vec_push_if_finite_nonzero(v, next)) {
+  if (!vec_push_if_finite(v, next)) {
     return 0;
   }
-  if (!vec_push_if_finite_nonzero(v, -prev)) {
+  if (!vec_push_if_finite(v, -prev)) {
     return 0;
   }
-  if (!vec_push_if_finite_nonzero(v, -x)) {
+  if (!vec_push_if_finite(v, -x)) {
     return 0;
   }
-  if (!vec_push_if_finite_nonzero(v, -next)) {
+  if (!vec_push_if_finite(v, -next)) {
     return 0;
   }
   return 1;
@@ -185,10 +185,31 @@ static int add_literal_bucket(u64_vec* v) {
     if (end == NULL || *end != '\0') {
       continue;
     }
-    if (isfinite(x) && x != 0.0) {
+    if (isfinite(x)) {
       if (!vec_push(v, bits_from_double(x))) {
         return 0;
       }
+    }
+  }
+  return 1;
+}
+
+static int add_special_bucket(u64_vec* v) {
+  static const uint64_t specials[] = {
+      UINT64_C(0x0000000000000000), /* +0 */
+      UINT64_C(0x8000000000000000), /* -0 */
+      UINT64_C(0x7ff0000000000000), /* +inf */
+      UINT64_C(0xfff0000000000000), /* -inf */
+      UINT64_C(0x7ff8000000000000), /* +qnan */
+      UINT64_C(0xfff8000000000000), /* -qnan */
+      UINT64_C(0x7ff8000000000001), /* +qnan payload */
+      UINT64_C(0xfff8000000000001), /* -qnan payload */
+  };
+  size_t i;
+
+  for (i = 0u; i < sizeof(specials) / sizeof(specials[0]); ++i) {
+    if (!vec_push(v, specials[i])) {
+      return 0;
     }
   }
   return 1;
@@ -285,6 +306,9 @@ static int build_deterministic_dataset(u64_vec* out) {
     return 0;
   }
   if (!add_subnormal_stress(out)) {
+    return 0;
+  }
+  if (!add_special_bucket(out)) {
     return 0;
   }
   return 1;
@@ -416,6 +440,257 @@ static void log_mismatch(
   }
 }
 
+static const uint64_t kPow10U64[20] = {
+    UINT64_C(1),
+    UINT64_C(10),
+    UINT64_C(100),
+    UINT64_C(1000),
+    UINT64_C(10000),
+    UINT64_C(100000),
+    UINT64_C(1000000),
+    UINT64_C(10000000),
+    UINT64_C(100000000),
+    UINT64_C(1000000000),
+    UINT64_C(10000000000),
+    UINT64_C(100000000000),
+    UINT64_C(1000000000000),
+    UINT64_C(10000000000000),
+    UINT64_C(100000000000000),
+    UINT64_C(1000000000000000),
+    UINT64_C(10000000000000000),
+    UINT64_C(100000000000000000),
+    UINT64_C(1000000000000000000),
+    UINT64_C(10000000000000000000),
+};
+
+static size_t append_u64_dec_local(char* out, uint64_t x) {
+  char rev[32];
+  size_t n = 0u;
+  size_t i;
+  if (x == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (x != 0u) {
+    rev[n++] = (char)('0' + (x % UINT64_C(10)));
+    x /= UINT64_C(10);
+  }
+  for (i = 0u; i < n; ++i) {
+    out[i] = rev[n - 1u - i];
+  }
+  return n;
+}
+
+static int parse_shortest_components(const char* s, uint64_t* out_sig, int* out_exp10, unsigned* out_digits) {
+  char digits[64];
+  size_t i = 0u;
+  unsigned dcount = 0u;
+  unsigned frac_digits = 0u;
+  int seen_dot = 0;
+  int exp_sign = 1;
+  int exp_part = 0;
+  size_t first;
+  size_t last;
+  uint64_t sig = 0u;
+  size_t j;
+
+  if (s[i] == '+' || s[i] == '-') {
+    i += 1u;
+  }
+  if (s[i] == '\0') {
+    return 0;
+  }
+
+  while (s[i] != '\0' && s[i] != 'e' && s[i] != 'E') {
+    char c = s[i];
+    if (c == '.') {
+      if (seen_dot) {
+        return 0;
+      }
+      seen_dot = 1;
+    } else if (c >= '0' && c <= '9') {
+      if (dcount >= sizeof(digits)) {
+        return 0;
+      }
+      digits[dcount++] = c;
+      if (seen_dot) {
+        frac_digits += 1u;
+      }
+    } else {
+      return 0;
+    }
+    i += 1u;
+  }
+
+  if (dcount == 0u) {
+    return 0;
+  }
+
+  if (s[i] == 'e' || s[i] == 'E') {
+    i += 1u;
+    if (s[i] == '+' || s[i] == '-') {
+      exp_sign = (s[i] == '-') ? -1 : 1;
+      i += 1u;
+    }
+    if (s[i] < '0' || s[i] > '9') {
+      return 0;
+    }
+    while (s[i] >= '0' && s[i] <= '9') {
+      if (exp_part < 100000000) {
+        exp_part = exp_part * 10 + (int)(s[i] - '0');
+      }
+      i += 1u;
+    }
+  }
+
+  if (s[i] != '\0') {
+    return 0;
+  }
+
+  first = 0u;
+  while (first < dcount && digits[first] == '0') {
+    first += 1u;
+  }
+  if (first == dcount) {
+    *out_sig = 0u;
+    *out_exp10 = 0;
+    *out_digits = 1u;
+    return 1;
+  }
+
+  last = dcount;
+  *out_exp10 = exp_sign * exp_part - (int)frac_digits;
+  while (last > first + 1u && digits[last - 1u] == '0') {
+    last -= 1u;
+    *out_exp10 += 1;
+  }
+
+  for (j = first; j < last; ++j) {
+    uint64_t prev = sig;
+    sig = sig * UINT64_C(10) + (uint64_t)(digits[j] - '0');
+    if (sig < prev) {
+      return 0;
+    }
+  }
+
+  *out_sig = sig;
+  *out_digits = (unsigned)(last - first);
+  return 1;
+}
+
+static int build_shorter_candidate(
+    char* out,
+    size_t out_cap,
+    int negative,
+    uint64_t sig,
+    unsigned digits,
+    int exp10) {
+  char sig_text[32];
+  size_t pos = 0u;
+  size_t sig_len = append_u64_dec_local(sig_text, sig);
+  int e = exp10;
+
+  if (digits == 0u || sig_len != (size_t)digits) {
+    return 0;
+  }
+  if (negative) {
+    if (pos >= out_cap) {
+      return 0;
+    }
+    out[pos++] = '-';
+  }
+  if (pos >= out_cap) {
+    return 0;
+  }
+  out[pos++] = sig_text[0];
+  if (digits > 1u) {
+    if (pos + 1u + (size_t)(digits - 1u) >= out_cap) {
+      return 0;
+    }
+    out[pos++] = '.';
+    memcpy(out + pos, sig_text + 1, (size_t)(digits - 1u));
+    pos += (size_t)(digits - 1u);
+  }
+  if (pos + 2u >= out_cap) {
+    return 0;
+  }
+  out[pos++] = 'e';
+  if (e < 0) {
+    out[pos++] = '-';
+    e = -e;
+  } else {
+    out[pos++] = '+';
+  }
+  if (pos >= out_cap) {
+    return 0;
+  }
+  pos += append_u64_dec_local(out + pos, (uint64_t)e);
+  if (pos >= out_cap) {
+    return 0;
+  }
+  out[pos] = '\0';
+  return 1;
+}
+
+static int shortest_has_shorter_candidate(uint64_t bits, const char* shortest, char* out_candidate, size_t out_cap) {
+  const int kDeltaRadius = 8;
+  const uint64_t kAbsMask = UINT64_C(0x7fffffffffffffff);
+  int negative = (bits >> 63u) != 0u;
+  uint64_t abs_bits = bits & kAbsMask;
+  uint64_t sig = 0u;
+  int exp10 = 0;
+  unsigned digits = 0u;
+  unsigned q;
+
+  if (abs_bits == 0u || ((abs_bits >> 52u) & 0x7ffu) == 0x7ffu) {
+    return 0;
+  }
+  if (!parse_shortest_components(shortest, &sig, &exp10, &digits)) {
+    return -1;
+  }
+  if (sig == 0u || digits <= 1u || digits >= 20u) {
+    return 0;
+  }
+
+  for (q = 1u; q < digits; ++q) {
+    unsigned cut = digits - q;
+    uint64_t cut_pow10 = kPow10U64[cut];
+    uint64_t lo = (q == 1u) ? UINT64_C(1) : kPow10U64[q - 1u];
+    uint64_t hi = kPow10U64[q] - UINT64_C(1);
+    uint64_t base = sig / cut_pow10;
+    int cand_exp10 = exp10 + (int)cut;
+    int delta;
+
+    for (delta = -kDeltaRadius; delta <= kDeltaRadius; ++delta) {
+      int64_t cand_i = (int64_t)base + (int64_t)delta;
+      uint64_t cand_sig;
+      char cand_text[96];
+      char* end = NULL;
+      double parsed;
+      if (cand_i < (int64_t)lo || cand_i > (int64_t)hi) {
+        continue;
+      }
+      cand_sig = (uint64_t)cand_i;
+      if (q > 1u && (cand_sig % UINT64_C(10)) == 0u) {
+        continue;
+      }
+      if (!build_shorter_candidate(cand_text, sizeof(cand_text), negative, cand_sig, q, cand_exp10)) {
+        continue;
+      }
+      parsed = strtod(cand_text, &end);
+      if (end != NULL && *end == '\0' && bits_from_double(parsed) == bits) {
+        if (out_candidate != NULL && out_cap > 0u) {
+          strncpy(out_candidate, cand_text, out_cap - 1u);
+          out_candidate[out_cap - 1u] = '\0';
+        }
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
 static int run_printf_oracle(const u64_vec* ds, int quick, oracle_stats* stats) {
   static const int precisions_full[] = {-1, 0, 1, 2, 3, 6, 9, 15, 17, 24, 50, 100, 200};
   static const int precisions_quick[] = {-1, 0, 1, 2, 6, 9, 17, 50};
@@ -433,6 +708,11 @@ static int run_printf_oracle(const u64_vec* ds, int quick, oracle_stats* stats) 
     int alt;
     int sign_mode;
 
+    /*
+     * Cross-libc NaN text/sign output is implementation-defined.
+     * Keep this differential focused on stable finite/inf behavior and enforce
+     * project NaN policy in run_printf_nan_policy().
+     */
     if (isnan(x)) {
       continue;
     }
@@ -486,6 +766,61 @@ static int run_printf_oracle(const u64_vec* ds, int quick, oracle_stats* stats) 
   return stats->failures == 0u;
 }
 
+static int run_printf_nan_policy(oracle_stats* stats) {
+  static const uint64_t nan_bits[] = {
+      UINT64_C(0x7ff8000000000000),
+      UINT64_C(0xfff8000000000000),
+      UINT64_C(0x7ff8000000000001),
+      UINT64_C(0xfff8000000000001),
+  };
+  static const int precisions[] = {-1, 0, 6};
+  size_t i;
+
+  for (i = 0u; i < sizeof(nan_bits) / sizeof(nan_bits[0]); ++i) {
+    double x = double_from_bits(nan_bits[i]);
+    int kind;
+    int upper;
+    int alt;
+    int sign_mode;
+    size_t p;
+
+    for (kind = 0; kind < 3; ++kind) {
+      for (p = 0u; p < sizeof(precisions) / sizeof(precisions[0]); ++p) {
+        for (upper = 0; upper <= 1; ++upper) {
+          for (alt = 0; alt <= 1; ++alt) {
+            for (sign_mode = 0; sign_mode < 3; ++sign_mode) {
+              ryu_printf_spec spec;
+              char got[64];
+              const char* expected = upper ? "NAN" : "nan";
+              size_t got_len = 0u;
+              ryu_status st;
+
+              spec.kind = (ryu_fmt_kind)kind;
+              spec.precision = precisions[p];
+              spec.uppercase = upper;
+              spec.alternate_form = alt;
+              spec.always_sign = (sign_mode == 1);
+              spec.space_sign = (sign_mode == 2);
+
+              st = ryu64_to_printf(got, sizeof(got), x, &spec, &got_len);
+              stats->cases += 1u;
+              if (st != RYU_OK) {
+                stats->failures += 1u;
+                continue;
+              }
+              if (strcmp(got, expected) != 0 || got_len != 3u) {
+                log_mismatch("printf-nan", stats, "text", got, expected);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return stats->failures == 0u;
+}
+
 static int run_shortest_oracle(const u64_vec* ds, int quick, oracle_stats* stats) {
   size_t i;
   size_t stride = quick ? ((ds->len / 3000u) + 1u) : 1u;
@@ -524,6 +859,56 @@ static int run_shortest_oracle(const u64_vec* ds, int quick, oracle_stats* stats
                 (unsigned long long)bits_from_double(x),
                 (unsigned long long)bits_from_double(parsed),
                 text);
+      }
+    }
+  }
+  return stats->failures == 0u;
+}
+
+static int run_shortest_minimality_oracle(const u64_vec* ds, int quick, oracle_stats* stats) {
+  size_t i;
+  size_t stride = quick ? ((ds->len / 3000u) + 1u) : ((ds->len / 12000u) + 1u);
+
+  for (i = 0u; i < ds->len; i += stride) {
+    uint64_t bits = ds->data[i];
+    uint64_t abs_bits = bits & UINT64_C(0x7fffffffffffffff);
+    double x = double_from_bits(bits);
+    char text[256];
+    char shorter[96];
+    size_t text_len = 0u;
+    ryu_status st;
+    int has_shorter;
+
+    if (abs_bits == 0u || ((abs_bits >> 52u) & 0x7ffu) == 0x7ffu) {
+      continue;
+    }
+
+    stats->cases += 1u;
+    st = ryu64_to_shortest(text, sizeof(text), x, &text_len);
+    if (st != RYU_OK) {
+      stats->failures += 1u;
+      continue;
+    }
+
+    has_shorter = shortest_has_shorter_candidate(bits, text, shorter, sizeof(shorter));
+    if (has_shorter < 0) {
+      stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[shortest-min] parse failure bits=0x%016llx text='%s'\n",
+                (unsigned long long)bits,
+                text);
+      }
+      continue;
+    }
+    if (has_shorter > 0) {
+      stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[shortest-min] shorter candidate found bits=0x%016llx shortest='%s' shorter='%s'\n",
+                (unsigned long long)bits,
+                text,
+                shorter);
       }
     }
   }
@@ -616,6 +1001,23 @@ static int compare_scan_full_with_oracle(
     return 1;
   }
 
+  if (isnan(oracle_value)) {
+    if (!(r.status == RYU_PARSE_OK || r.status == RYU_PARSE_INEXACT) || !isnan(r.value)) {
+      stats->failures += 1u;
+      if (stats->failures <= 20u) {
+        fprintf(stderr,
+                "[%s] nan mismatch text='%s' status=%d val=0x%016llx oracle=0x%016llx\n",
+                tag,
+                text,
+                (int)r.status,
+                (unsigned long long)bits_from_double(r.value),
+                (unsigned long long)bits_from_double(oracle_value));
+      }
+      return 0;
+    }
+    return 1;
+  }
+
   if (oracle_value == 0.0 && text_has_nonzero_digit_prefix(text, oracle_len)) {
     if (r.status != RYU_PARSE_UNDERFLOW && bits_from_double(r.value) != bits_from_double(oracle_value)) {
       stats->failures += 1u;
@@ -672,9 +1074,6 @@ static int run_scan_oracle_from_formats(const u64_vec* ds, int quick, oracle_sta
     double x = double_from_bits(ds->data[i]);
     int kind;
     int upper;
-    if (isnan(x)) {
-      continue;
-    }
     for (kind = 0; kind < 3; ++kind) {
       for (k = 0u; k < sizeof(precisions) / sizeof(precisions[0]); ++k) {
         for (upper = 0; upper <= 1; ++upper) {
@@ -709,7 +1108,13 @@ static int run_scan_oracle_from_formats(const u64_vec* ds, int quick, oracle_sta
 
           tiny = ryu64_from_decimal_tiny(text, text_len);
           if (tiny.status == RYU_PARSE_OK || tiny.status == RYU_PARSE_INEXACT) {
-            if (tiny.parsed_len != oracle_len || bits_from_double(tiny.value) != bits_from_double(oracle_value)) {
+            if (tiny.parsed_len != oracle_len) {
+              stats->failures += 1u;
+            } else if (isnan(oracle_value)) {
+              if (!isnan(tiny.value)) {
+                stats->failures += 1u;
+              }
+            } else if (bits_from_double(tiny.value) != bits_from_double(oracle_value)) {
               stats->failures += 1u;
             }
           } else if (tiny.status != RYU_PARSE_OUT_OF_RANGE) {
@@ -740,16 +1145,42 @@ static size_t append_u64_dec(char* out, uint64_t x) {
   return n;
 }
 
-static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int huge_scale) {
+static size_t build_random_decimal(
+    char* out,
+    size_t cap,
+    uint64_t* state,
+    int huge_scale,
+    int force_long_digits) {
+  const unsigned kSmallDigitsMax = 18u;
+  const unsigned kWideDigitsMax = 3600u;
+  const unsigned kTruncDigitsMin = 10000u;
+  const unsigned kTruncDigitsSpan = 12000u;
   size_t pos = 0u;
   unsigned lead_ws = (unsigned)(xorshift64(state) % 3u);
-  unsigned digits = (unsigned)(xorshift64(state) % (huge_scale ? 3600u : 18u)) + 1u;
-  unsigned split = (unsigned)(xorshift64(state) % (uint64_t)(digits + 1u));
-  int exp = (int)(xorshift64(state) % (huge_scale ? 20001u : 39u)) - (huge_scale ? 10000 : 19);
+  unsigned digits = 0u;
+  unsigned split = 0u;
+  int exp = 0;
   unsigned i;
 
   if (cap < 16u) {
     return 0u;
+  }
+
+  if (!huge_scale) {
+    digits = (unsigned)(xorshift64(state) % kSmallDigitsMax) + 1u;
+  } else if (force_long_digits) {
+    /* Force parser truncation path coverage beyond bigint lexical capacity. */
+    digits = kTruncDigitsMin + (unsigned)(xorshift64(state) % kTruncDigitsSpan);
+  } else {
+    digits = (unsigned)(xorshift64(state) % kWideDigitsMax) + 1u;
+  }
+  if (force_long_digits) {
+    split = (unsigned)(xorshift64(state) % (uint64_t)digits) + 1u;
+    /* Keep numeric magnitude near 1e[-20..20] while preserving long mantissa text. */
+    exp = (int)split - (int)digits + (int)(xorshift64(state) % 41u) - 20;
+  } else {
+    split = (unsigned)(xorshift64(state) % (uint64_t)(digits + 1u));
+    exp = (int)(xorshift64(state) % (huge_scale ? 20001u : 39u)) - (huge_scale ? 10000 : 19);
   }
 
   for (i = 0u; i < lead_ws && pos < cap - 1u; ++i) {
@@ -763,9 +1194,14 @@ static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int h
     out[pos++] = '.';
   }
   for (i = 0u; i < digits && pos < cap - 1u; ++i) {
-    unsigned d = (unsigned)(xorshift64(state) % 10u);
-    if (i == 0u && d == 0u) {
-      d = 1u;
+    unsigned d;
+    if (force_long_digits) {
+      d = (i == 0u) ? ((unsigned)(xorshift64(state) % 9u) + 1u) : 0u;
+    } else {
+      d = (unsigned)(xorshift64(state) % 10u);
+      if (i == 0u && d == 0u) {
+        d = 1u;
+      }
     }
     out[pos++] = (char)('0' + d);
     if (i + 1u == split && split != digits && pos < cap - 1u) {
@@ -773,7 +1209,7 @@ static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int h
     }
   }
 
-  if ((xorshift64(state) & UINT64_C(3)) != 0u && pos < cap - 1u) {
+  if ((force_long_digits || (xorshift64(state) & UINT64_C(3)) != 0u) && pos < cap - 1u) {
     int e = exp;
     out[pos++] = (xorshift64(state) & UINT64_C(1)) != 0u ? 'e' : 'E';
     if (e < 0) {
@@ -787,7 +1223,7 @@ static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int h
     }
   }
 
-  if ((xorshift64(state) & UINT64_C(7)) == 0u && pos < cap - 2u) {
+  if (!force_long_digits && (xorshift64(state) & UINT64_C(7)) == 0u && pos < cap - 2u) {
     out[pos++] = 'x';
     out[pos++] = 'y';
   }
@@ -797,13 +1233,24 @@ static size_t build_random_decimal(char* out, size_t cap, uint64_t* state, int h
 }
 
 static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_stats* stats) {
+  const size_t kFuzzTextCap = 32768u;
   uint64_t state = seed;
+  char* text = (char*)malloc(kFuzzTextCap);
+  size_t forced_long_cases = 0u;
   size_t i;
+
+  if (text == NULL) {
+    return 0;
+  }
+
   for (i = 0u; i < iters; ++i) {
-    char text[8192];
-    size_t text_len = build_random_decimal(text, sizeof(text), &state, huge_scale);
+    int force_long_digits = (huge_scale && ((i % 8u) == 0u)) ? 1 : 0;
+    size_t text_len = build_random_decimal(text, kFuzzTextCap, &state, huge_scale, force_long_digits);
     double oracle_value;
     size_t oracle_len;
+    if (force_long_digits) {
+      forced_long_cases += 1u;
+    }
     stats->cases += 1u;
     if (text_len == 0u) {
       stats->failures += 1u;
@@ -828,6 +1275,10 @@ static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_sta
       continue;
     }
   }
+  if (huge_scale && forced_long_cases == 0u) {
+    stats->failures += 1u;
+  }
+  free(text);
   return stats->failures == 0u;
 }
 
@@ -885,8 +1336,18 @@ int main(int argc, char** argv) {
 
   mark = stats;
   t0 = now_seconds();
+  run_shortest_minimality_oracle(&ds, quick, &stats);
+  print_summary("shortest-minimality", &mark, &stats, now_seconds() - t0);
+
+  mark = stats;
+  t0 = now_seconds();
   run_9sig_oracle(&ds, quick, &stats);
   print_summary("9sig-oracle", &mark, &stats, now_seconds() - t0);
+
+  mark = stats;
+  t0 = now_seconds();
+  run_printf_nan_policy(&stats);
+  print_summary("printf-nan-policy", &mark, &stats, now_seconds() - t0);
 
   mark = stats;
   t0 = now_seconds();
