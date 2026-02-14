@@ -111,6 +111,10 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
  * Full parser entry point (libc-free).
  * - When built with RYU64_ENABLE_PARSE_BIGINT, supports wide decimal ranges
  *   using bigint-backed conversion.
+ * - Conversion tracks decimal powers as 5^k plus a binary exponent adjustment
+ *   to keep intermediate rationals compact.
+ * - For extremely long mantissas or ambiguous truncated intervals, the parser
+ *   may return RYU_PARSE_OUT_OF_RANGE.
  * - Without that macro, falls back to tiny parser coverage and may return
  *   RYU_PARSE_UNSUPPORTED for wider ranges.
  */

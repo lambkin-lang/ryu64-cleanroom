@@ -535,8 +535,7 @@ static int compare_scan_full_with_oracle(
     double oracle_value,
     size_t oracle_len,
     oracle_stats* stats,
-    const char* tag,
-    int allow_out_of_range) {
+    const char* tag) {
   ryu64_parse_result r = ryu64_from_decimal_full(text, text_len);
 
   if (r.parsed_len != oracle_len) {
@@ -595,10 +594,6 @@ static int compare_scan_full_with_oracle(
       }
       return 0;
     }
-    return 1;
-  }
-
-  if (allow_out_of_range && r.status == RYU_PARSE_OUT_OF_RANGE) {
     return 1;
   }
 
@@ -672,7 +667,7 @@ static int run_scan_oracle_from_formats(const u64_vec* ds, int quick, oracle_sta
             continue;
           }
 
-          if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-format", 0)) {
+          if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-format")) {
             continue;
           }
 
@@ -781,7 +776,7 @@ static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_sta
 
     if (!oracle_scan_text(text, text_len, &oracle_value, &oracle_len)) {
       ryu64_parse_result r = ryu64_from_decimal_full(text, text_len);
-      if (r.status != RYU_PARSE_INVALID && !(huge_scale && r.status == RYU_PARSE_OUT_OF_RANGE)) {
+      if (r.status != RYU_PARSE_INVALID) {
         stats->failures += 1u;
         if (stats->failures <= 20u) {
           fprintf(stderr,
@@ -793,7 +788,7 @@ static int run_scan_fuzz(size_t iters, int huge_scale, uint64_t seed, oracle_sta
       continue;
     }
 
-    if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-fuzz", huge_scale)) {
+    if (!compare_scan_full_with_oracle(text, text_len, oracle_value, oracle_len, stats, "scan-fuzz")) {
       continue;
     }
   }

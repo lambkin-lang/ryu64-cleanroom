@@ -76,6 +76,8 @@ The following were not used before implementation:
 - fixed-width fast path for non-truncated significands (`<=19` digits) in exponent range `[-38, 38]`,
 - positive exponent fixed-width path uses local 192-bit integer arithmetic + nearest-even rounding,
 - negative exponent fixed-width path uses ratio arithmetic with bounded `10^k` denominators in `uint128`,
+- bigint conversion path decomposes `10^k` as `5^k * 2^k` and carries a separate binary exponent adjustment to reduce intermediate growth,
+- bigint conversion cancels available powers of 2/5 from the parsed significand before denominator construction,
 - when lexical significand accumulation truncates (capacity exceeded), parser now forms a decimal interval from kept digits:
   - lower bound: kept prefix scaled by dropped-digit count,
   - upper bound: `(kept + 1)` scaled by dropped-digit count,
@@ -105,6 +107,7 @@ These verify non-oracle sources compile in freestanding/no-libc configurations.
 
 - `make test`
 - Includes deterministic unit tests and differential checks vs libc behavior.
+- Includes long-mantissa parse checks that exceed bigint lexical capacity and validate truncated-interval behavior against `strtod`.
 
 - `make oracle-test` / `make benchmark-speed` / `make benchmark-size`
 - Oracle program: `/test/oracle_stdio.c`

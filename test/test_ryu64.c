@@ -788,9 +788,11 @@ static int run_parse_full_boundary_vs_strtod(void) {
 }
 
 static int run_parse_full_long_truncated_vs_strtod(void) {
-  char text_a[4096];
-  char text_b[4096];
-  char text_c[4096];
+  char text_a[16384];
+  char text_b[16384];
+  char text_c[16384];
+  char text_d[16384];
+  char text_e[16384];
   size_t i = 0u;
   size_t len;
 
@@ -826,6 +828,29 @@ static int run_parse_full_long_truncated_vs_strtod(void) {
   memcpy(text_c + i, "e-3001", 7u);
   len = i + 6u;
   if (!check_parse_full_vs_strtod(text_c, len, "long-trunc-c")) {
+    return 0;
+  }
+
+  i = 0u;
+  text_d[i++] = '1';
+  while (i < 12000u) {
+    text_d[i++] = '0';
+  }
+  memcpy(text_d + i, "e-11999", 8u);
+  len = i + 7u;
+  if (!check_parse_full_vs_strtod(text_d, len, "long-trunc-d")) {
+    return 0;
+  }
+
+  i = 0u;
+  text_e[i++] = '1';
+  while (i < 12000u) {
+    text_e[i++] = '0';
+  }
+  text_e[i++] = '1';
+  memcpy(text_e + i, "e-12000", 8u);
+  len = i + 7u;
+  if (!check_parse_full_vs_strtod(text_e, len, "long-trunc-e")) {
     return 0;
   }
 

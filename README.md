@@ -37,12 +37,14 @@ Parser tier contract:
 - Full parser (`ryu64_from_decimal_full`) with `RYU64_ENABLE_PARSE_BIGINT`:
   - accepts general decimal mantissas and large exponents with libc-free conversion
   - uses a fixed-width integer fast path for non-truncated mantissas (`<=19` significant digits) with decimal exponent in `[-38, 38]`
+  - bigint conversion decomposes `10^k` as `5^k * 2^k` (tracked with a binary exponent adjustment) to reduce intermediate growth and avoid avoidable range fallthrough
+  - lexical significand accumulation stores up to `RYU_BIGINT_MAX_LIMBS * 9` decimal digits (`9216` with current defaults) before entering interval truncation logic
   - for mantissas that exceed bigint capacity, uses a conservative truncated-interval resolver:
     - computes lower/upper decimal bounds from kept digits
     - returns a value only when both bounds map to the same binary64 result
   - supports `nan(payload)` token consumption (ASCII alnum/underscore payload)
   - returns `RYU_PARSE_OVERFLOW`/`RYU_PARSE_UNDERFLOW` for numeric range overflow/underflow
-  - may still return `RYU_PARSE_OUT_OF_RANGE` when truncated intervals remain ambiguous or internal intermediate sizes exceed fixed bigint capacity
+  - returns `RYU_PARSE_OUT_OF_RANGE` only when truncated intervals remain ambiguous or when fixed bigint capacity is exceeded during exact rational conversion
 
 ## Build (macOS + GNU Make 3.81 compatible)
 
