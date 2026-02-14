@@ -30,6 +30,29 @@ This document tracks clean-room provenance for `ryu64-cleanroom`.
    - URL: https://man.archlinux.org/man/snprintf.3.en
    - Purpose: implementation compatibility checklist for tests.
 
+## Decimal -> Binary64 Parser
+
+Allowed/spec references consulted for parser design:
+
+1. Daniel Lemire et al., "Number Parsing at a Gigabyte per Second"
+   - arXiv: https://arxiv.org/abs/2101.11408
+   - Purpose: fast decimal-to-binary algorithm family reference and rounding-oriented
+     design constraints for fixed-width arithmetic fast paths.
+
+2. IEEE 754 binary64 layout references.
+   - C floating-point representation notes and binary64 field conventions.
+   - Purpose: sign/exponent/fraction packing behavior and nearest-even rounding targets.
+
+3. C/POSIX syntax references for `strtod`-style input behavior.
+   - POSIX/C descriptions of decimal floating input grammar (`sign`, decimal, exponent,
+     `inf`, `nan`) used as behavior targets for parsing.
+
+Parser clean-room statement:
+
+- No existing parser implementation code (libc/fast_float/dtoa/musl/glibc/bionic,
+  PostgreSQL, language runtimes, or code snippets/tables) was read before writing
+  `ryu64_parse_*` modules.
+
 ## Notes
 
 - Post-freeze differential comparison against external Ryu implementations is allowed,

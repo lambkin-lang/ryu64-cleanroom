@@ -52,11 +52,194 @@ static uint64_t xorshift64(uint64_t* state) {
 }
 
 static int is_nan_bits(uint64_t bits) {
-  uint64_t exp = (bits >> 52) & 0x7ffu;
-  uint64_t frac = bits & ((UINT64_C(1) << 52) - UINT64_C(1));
+  uint64_t exp = (bits >> 52u) & 0x7ffu;
+  uint64_t frac = bits & ((UINT64_C(1) << 52u) - UINT64_C(1));
   return exp == 0x7ffu && frac != 0u;
 }
 
+static int parse_status_success(ryu_parse_status st) {
+  return st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT;
+}
+
+static int expect_parse_value(
+    const char* text,
+    ryu_parse_status expected_status,
+    size_t expected_len,
+    uint64_t expected_bits) {
+  ryu64_parse_result r = ryu64_from_decimal_tiny(text, strlen(text));
+  if (r.status != expected_status) {
+    fprintf(stderr,
+            "parse status mismatch text='%s' got=%d expected=%d\n",
+            text,
+            (int)r.status,
+            (int)expected_status);
+    return 0;
+  }
+  if (r.parsed_len != expected_len) {
+    fprintf(stderr,
+            "parse len mismatch text='%s' got=%lu expected=%lu\n",
+            text,
+            (unsigned long)r.parsed_len,
+            (unsigned long)expected_len);
+    return 0;
+  }
+  if (parse_status_success(r.status) && bits_from_double(r.value) != expected_bits) {
+    fprintf(stderr,
+            "parse value mismatch text='%s' got=0x%016llx expected=0x%016llx\n",
+            text,
+            (unsigned long long)bits_from_double(r.value),
+            (unsigned long long)expected_bits);
+    return 0;
+  }
+  return 1;
+}
+
+static int run_parser_unit_tests(void) {
+  ryu64_parse_result r;
+
+  if (!expect_parse_value("0", RYU_PARSE_OK, 1u, UINT64_C(0x0000000000000000))) {
+    return 0;
+  }
+  if (!expect_parse_value("-0", RYU_PARSE_OK, 2u, UINT64_C(0x8000000000000000))) {
+    return 0;
+  }
+  if (!expect_parse_value(".5", RYU_PARSE_OK, 2u, bits_from_double(0.5))) {
+    return 0;
+  }
+  if (!expect_parse_value("1e", RYU_PARSE_OK, 1u, bits_from_double(1.0))) {
+    return 0;
+  }
+  if (!expect_parse_value("  +12.5xyz", RYU_PARSE_OK, 7u, bits_from_double(12.5))) {
+    return 0;
+  }
+  if (!expect_parse_value("inf", RYU_PARSE_OK, 3u, UINT64_C(0x7ff0000000000000))) {
+    return 0;
+  }
+  if (!expect_parse_value("-Infinity!", RYU_PARSE_OK, 9u, UINT64_C(0xfff0000000000000))) {
+    return 0;
+  }
+
+  r = ryu64_from_decimal_tiny("nan(payload)", 12u);
+  if (r.status != RYU_PARSE_OK || r.parsed_len != 3u || !isnan(r.value)) {
+    fprintf(stderr, "nan parsing mismatch\n");
+    return 0;
+  }
+
+  if (!expect_parse_value("", RYU_PARSE_INVALID, 0u, 0u)) {
+    return 0;
+  }
+  if (!expect_parse_value("   ", RYU_PARSE_INVALID, 0u, 0u)) {
+    return 0;
+  }
+  if (!expect_parse_value("+", RYU_PARSE_INVALID, 0u, 0u)) {
+    return 0;
+  }
+  if (!expect_parse_value(".", RYU_PARSE_INVALID, 0u, 0u)) {
+    return 0;
+  }
+
+  r = ryu64_from_decimal_tiny("1e20", 4u);
+  if (r.status != RYU_PARSE_OUT_OF_RANGE || r.parsed_len != 4u) {
+    fprintf(stderr, "range parsing mismatch for 1e20\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_tiny("12345678901234567890", 20u);
+  if (r.status != RYU_PARSE_OUT_OF_RANGE || r.parsed_len != 20u) {
+    fprintf(stderr, "sig-digit overflow mismatch\n");
+    return 0;
+  }
+
+  if (!expect_parse_value("0e9999", RYU_PARSE_OK, 6u, UINT64_C(0x0000000000000000))) {
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("1e20", 4u);
+  if (r.status != RYU_PARSE_UNSUPPORTED || r.parsed_len != 4u) {
+    fprintf(stderr, "full parser stub mismatch\n");
+    return 0;
+  }
+
+  r = ryu64_from_decimal_full("1.25", 4u);
+  if (!parse_status_success(r.status) || r.parsed_len != 4u || bits_from_double(r.value) != bits_from_double(1.25)) {
+    fprintf(stderr, "full parser tiny-path mismatch\n");
+    return 0;
+  }
+
+  return 1;
+}
+
+static int run_tiny_roundtrip_from_shortest(unsigned iters) {
+  uint64_t state = UINT64_C(0x2456a8ce13579bdf);
+  unsigned i;
+  unsigned accepted = 0u;
+
+  for (i = 0u; i < iters; ++i) {
+    uint64_t in_bits = xorshift64(&state);
+    double x = double_from_bits(in_bits);
+    char out[256];
+    size_t out_len = 0u;
+    ryu64_parse_result p;
+
+    if (is_nan_bits(in_bits)) {
+      continue;
+    }
+    if (((in_bits >> 52u) & 0x7ffu) == 0x7ffu) {
+      continue;
+    }
+
+    if (ryu64_to_shortest(out, sizeof(out), x, &out_len) != RYU_OK) {
+      fprintf(stderr, "shortest generation failed in tiny roundtrip\n");
+      return 0;
+    }
+
+    p = ryu64_from_decimal_tiny(out, out_len);
+    if (parse_status_success(p.status)) {
+      accepted += 1u;
+      if (bits_from_double(p.value) != in_bits) {
+        fprintf(stderr,
+                "tiny roundtrip mismatch in=0x%016llx out=0x%016llx str='%s'\n",
+                (unsigned long long)in_bits,
+                (unsigned long long)bits_from_double(p.value),
+                out);
+        return 0;
+      }
+    } else if (p.status != RYU_PARSE_OUT_OF_RANGE) {
+      fprintf(stderr,
+              "unexpected tiny parse status=%d str='%s'\n",
+              (int)p.status,
+              out);
+      return 0;
+    }
+  }
+
+  if (accepted < 100u) {
+    fprintf(stderr, "accepted too few tiny roundtrip cases: %u\n", accepted);
+    return 0;
+  }
+  return 1;
+}
+
+static int run_9sig_smoke(unsigned iters) {
+  uint64_t state = UINT64_C(0x1122334455667788);
+  unsigned i;
+  for (i = 0u; i < iters; ++i) {
+    double x = double_from_bits(xorshift64(&state));
+    char out[256];
+    size_t out_len = 0u;
+    if (ryu64_to_9sig(out, sizeof(out), x, &out_len) != RYU_OK) {
+      fprintf(stderr, "9sig failed at iter=%u\n", i);
+      return 0;
+    }
+    if (out_len == 0u || out_len >= sizeof(out)) {
+      fprintf(stderr, "9sig bad length at iter=%u\n", i);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+#if defined(RYU_ENABLE_LIBC_ORACLE)
 static int run_roundtrip_edges(void) {
   const uint64_t edge_bits[] = {
       UINT64_C(0x0000000000000000),
@@ -90,7 +273,7 @@ static int run_roundtrip_edges(void) {
     if (is_nan_bits(in_bits)) {
       continue;
     }
-    if (((in_bits >> 52) & 0x7ffu) == 0x7ffu) {
+    if (((in_bits >> 52u) & 0x7ffu) == 0x7ffu) {
       continue;
     }
     {
@@ -229,38 +412,132 @@ static int run_printf_diff(unsigned iters) {
   return 1;
 }
 
-static int run_9sig_smoke(unsigned iters) {
-  uint64_t state = UINT64_C(0x1122334455667788);
+static size_t append_u64_dec(char* out, uint64_t x) {
+  char rev[32];
+  size_t n = 0u;
+  size_t i;
+  if (x == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (x != 0u) {
+    rev[n++] = (char)('0' + (x % UINT64_C(10)));
+    x /= UINT64_C(10);
+  }
+  for (i = 0u; i < n; ++i) {
+    out[i] = rev[n - 1u - i];
+  }
+  return n;
+}
+
+static int run_parse_diff_vs_strtod(unsigned iters) {
+  uint64_t state = UINT64_C(0xa1b2c3d4e5f60718);
   unsigned i;
+
   for (i = 0u; i < iters; ++i) {
-    double x = double_from_bits(xorshift64(&state));
-    char out[256];
-    size_t out_len = 0u;
-    if (ryu64_to_9sig(out, sizeof(out), x, &out_len) != RYU_OK) {
-      fprintf(stderr, "9sig failed at iter=%u\n", i);
+    char digits[32];
+    char text[128];
+    size_t len;
+    size_t out = 0u;
+    unsigned dcount = (unsigned)((xorshift64(&state) % 19u) + 1u);
+    unsigned j;
+    int q = (int)(xorshift64(&state) % 39u) - 19;
+    unsigned split;
+    int exp_part;
+    ryu64_parse_result p;
+    char* end = NULL;
+    double libc_v;
+
+    digits[0] = (char)('1' + (xorshift64(&state) % 9u));
+    for (j = 1u; j < dcount; ++j) {
+      digits[j] = (char)('0' + (xorshift64(&state) % 10u));
+    }
+    digits[dcount] = '\0';
+
+    if ((xorshift64(&state) & UINT64_C(1)) != 0u) {
+      text[out++] = '-';
+    }
+
+    split = (unsigned)(xorshift64(&state) % (uint64_t)(dcount + 1u));
+    if (split == 0u) {
+      text[out++] = '.';
+      memcpy(text + out, digits, dcount);
+      out += dcount;
+    } else if (split == dcount) {
+      memcpy(text + out, digits, dcount);
+      out += dcount;
+    } else {
+      memcpy(text + out, digits, split);
+      out += split;
+      text[out++] = '.';
+      memcpy(text + out, digits + split, dcount - split);
+      out += dcount - split;
+    }
+
+    exp_part = q + (int)dcount - (int)split;
+    text[out++] = (xorshift64(&state) & UINT64_C(1)) != 0u ? 'E' : 'e';
+    if (exp_part >= 0) {
+      text[out++] = '+';
+    } else {
+      text[out++] = '-';
+      exp_part = -exp_part;
+    }
+    out += append_u64_dec(text + out, (uint64_t)exp_part);
+    text[out] = '\0';
+
+    len = out;
+    p = ryu64_from_decimal_tiny(text, len);
+    if (!parse_status_success(p.status) || p.parsed_len != len) {
+      fprintf(stderr, "tiny parser rejected bounded input '%s' status=%d\n", text, (int)p.status);
       return 0;
     }
-    if (out_len == 0u || out_len >= sizeof(out)) {
-      fprintf(stderr, "9sig bad length at iter=%u\n", i);
+
+    libc_v = strtod(text, &end);
+    if (end == NULL || (size_t)(end - text) != len) {
+      fprintf(stderr, "strtod parse mismatch for '%s'\n", text);
+      return 0;
+    }
+
+    if (bits_from_double(p.value) != bits_from_double(libc_v)) {
+      fprintf(stderr,
+              "parse oracle mismatch str='%s' tiny=0x%016llx libc=0x%016llx\n",
+              text,
+              (unsigned long long)bits_from_double(p.value),
+              (unsigned long long)bits_from_double(libc_v));
       return 0;
     }
   }
+
   return 1;
 }
+#endif
 
 int main(void) {
+  if (!run_parser_unit_tests()) {
+    return 1;
+  }
+  if (!run_tiny_roundtrip_from_shortest(30000u)) {
+    return 1;
+  }
+  if (!run_9sig_smoke(10000u)) {
+    return 1;
+  }
+
+#if defined(RYU_ENABLE_LIBC_ORACLE)
   if (!run_roundtrip_edges()) {
     return 1;
   }
   if (!run_roundtrip_random(20000u)) {
     return 1;
   }
-  if (!run_9sig_smoke(10000u)) {
-    return 1;
-  }
   if (!run_printf_diff(3000u)) {
     return 1;
   }
+  if (!run_parse_diff_vs_strtod(20000u)) {
+    return 1;
+  }
+#endif
+
   printf("all tests passed\n");
   return 0;
 }

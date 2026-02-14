@@ -45,6 +45,22 @@ typedef enum {
   RYU_INVALID = 3
 } ryu_status;
 
+typedef enum {
+  RYU_PARSE_OK = 0,
+  RYU_PARSE_INVALID = 1,
+  RYU_PARSE_OUT_OF_RANGE = 2,
+  RYU_PARSE_INEXACT = 3,
+  RYU_PARSE_UNSUPPORTED = 4,
+  RYU_PARSE_OVERFLOW = 5,
+  RYU_PARSE_UNDERFLOW = 6
+} ryu_parse_status;
+
+typedef struct {
+  ryu_parse_status status;
+  double value;
+  size_t parsed_len;
+} ryu64_parse_result;
+
 /*
  * 9sig mode policy (Option 2: shortest-but-capped):
  * - If shortest-roundtrip uses <= 9 significant digits, return shortest output.
@@ -80,6 +96,22 @@ ryu_status ryu64_to_printf(
     double x,
     const ryu_printf_spec* spec,
     size_t* out_len);
+
+/*
+ * Tiny decimal parser contract:
+ * - C-locale ASCII syntax only.
+ * - No heap, no locale, no libc parser calls.
+ * - Nonzero values are accepted when they have <= 19 significant digits and
+ *   effective base-10 exponent in [-19, 19].
+ * - Inputs outside the tiny contract return RYU_PARSE_OUT_OF_RANGE.
+ */
+ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
+
+/*
+ * Full parser entry point (libc-free). Current implementation provides a tiny
+ * parser fallback and reports RYU_PARSE_UNSUPPORTED for wider numeric ranges.
+ */
+ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n);
 
 #ifdef __cplusplus
 }
