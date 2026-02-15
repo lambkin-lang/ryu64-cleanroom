@@ -296,25 +296,6 @@ int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits) {
   return 1;
 }
 
-int ryu_bigint_div10_exact(ryu_bigint* a) {
-  uint64_t carry = 0u;
-  size_t idx;
-
-  if (a->len == 0u) {
-    return 0;
-  }
-  for (idx = a->len; idx > 0u; --idx) {
-    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
-    a->limb[idx - 1u] = (uint32_t)(cur / UINT64_C(10));
-    carry = cur % UINT64_C(10);
-  }
-  if (a->len == 0u) {
-    return 0;
-  }
-  ryu_bigint_normalize(a);
-  return carry == 0u;
-}
-
 int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
   uint64_t carry = 0u;
   size_t idx;

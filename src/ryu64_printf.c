@@ -163,49 +163,6 @@ static int ryu_emit_scientific_from_rounded(
   return 1;
 }
 
-static int ryu_trim_for_g(char* out, size_t* out_len) {
-  size_t len = *out_len;
-  size_t e_pos = len;
-  size_t dot_pos = len;
-  size_t i;
-
-  for (i = 0u; i < len; ++i) {
-    if (out[i] == 'e' || out[i] == 'E') {
-      e_pos = i;
-      break;
-    }
-  }
-  for (i = 0u; i < e_pos; ++i) {
-    if (out[i] == '.') {
-      dot_pos = i;
-      break;
-    }
-  }
-  if (dot_pos == len) {
-    return 1;
-  }
-
-  i = e_pos;
-  while (i > dot_pos + 1u && out[i - 1u] == '0') {
-    i -= 1u;
-  }
-  if (i == dot_pos + 1u) {
-    i -= 1u;
-  }
-
-  if (e_pos < len) {
-    size_t tail = len - e_pos;
-    memmove(out + i, out + e_pos, tail + 1u);
-    len = i + tail;
-  } else {
-    out[i] = '\0';
-    len = i;
-  }
-
-  *out_len = len;
-  return 1;
-}
-
 static ryu_status ryu_printf_e(
     char* out,
     size_t out_cap,
@@ -366,7 +323,7 @@ static ryu_status ryu_printf_g(
   }
 
   if (!alternate_form) {
-    if (!ryu_trim_for_g(out, out_len)) {
+    if (!ryu_trim_trailing_fraction_zeros(out, out_len)) {
       return RYU_UNSUPPORTED;
     }
   }

@@ -87,7 +87,6 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m);
 int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p);
 int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p);
 int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits);
-int ryu_bigint_div10_exact(ryu_bigint* a);
 int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div);
 int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out);
 unsigned ryu_bigint_decimal_len(const ryu_bigint* a);

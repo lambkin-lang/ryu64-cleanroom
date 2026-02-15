@@ -450,7 +450,7 @@ static ryu_parse_status ryu_convert_decimal_bigint_to_double(
   }
 
   while (exp10 < 0 && num->len != 0u && (num->limb[0] % 10u) == 0u) {
-    if (!ryu_bigint_div10_exact(num)) {
+    if (!ryu_bigint_div_small_exact(num, 10u)) {
       break;
     }
     exp10 += 1;
