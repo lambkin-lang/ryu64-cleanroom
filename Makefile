@@ -317,6 +317,7 @@ SHOOTOUT_WASM_POW5_FLAGS =
 SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX =
 SHOOTOUT_REPORT_DIR ?= build/reports
 SHOOTOUT_SIZE_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_size.tsv
+SHOOTOUT_SIZE_ROUNDTRIP_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_size_roundtrip.tsv
 SHOOTOUT_PERF_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_perf.tsv
 SHOOTOUT_PERF_FAILURE_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_perf_failures.tsv
 SHOOTOUT_HTML_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_report.html
@@ -371,7 +372,7 @@ shootout-bench: shootout-report-perf
 
 shootout-report: shootout-report-html shootout-track
 
-shootout-report-size: build/shootout_ryu64_native build/shootout_ryu64_mvp.wasm build/shootout_ryu64_gcplus.wasm build/shootout_snprintf_native build/shootout_snprintf_mvp.wasm build/shootout_snprintf_gcplus.wasm
+shootout-report-size: build/shootout_ryu64_native build/shootout_ryu64_mvp.wasm build/shootout_ryu64_gcplus.wasm build/shootout_snprintf_native build/shootout_snprintf_mvp.wasm build/shootout_snprintf_gcplus.wasm build/shootout_ryu64_rt_native build/shootout_ryu64_rt_mvp.wasm build/shootout_ryu64_rt_gcplus.wasm build/shootout_snprintf_rt_native build/shootout_snprintf_rt_mvp.wasm build/shootout_snprintf_rt_gcplus.wasm
 	@mkdir -p $(SHOOTOUT_REPORT_DIR)
 	@{ \
 		printf "id\tlabel\tbytes\n"; \
@@ -382,14 +383,30 @@ shootout-report-size: build/shootout_ryu64_native build/shootout_ryu64_mvp.wasm 
 		printf "snprintf_wasm_mvp\tsnprintf wasm mvp\t%s\n" "$$(wc -c < build/shootout_snprintf_mvp.wasm | tr -d ' ')"; \
 		printf "snprintf_wasm_gcplus\tsnprintf wasm gcplus\t%s\n" "$$(wc -c < build/shootout_snprintf_gcplus.wasm | tr -d ' ')"; \
 	} > $(SHOOTOUT_SIZE_REPORT)
+	@{ \
+		printf "id\tlabel\tbytes\n"; \
+		printf "ryu64_rt_native\tryu64 roundtrip native\t%s\n" "$$(wc -c < build/shootout_ryu64_rt_native | tr -d ' ')"; \
+		printf "ryu64_rt_wasm_mvp\tryu64 roundtrip wasm mvp\t%s\n" "$$(wc -c < build/shootout_ryu64_rt_mvp.wasm | tr -d ' ')"; \
+		printf "ryu64_rt_wasm_gcplus\tryu64 roundtrip wasm gcplus\t%s\n" "$$(wc -c < build/shootout_ryu64_rt_gcplus.wasm | tr -d ' ')"; \
+		printf "snprintf_rt_native\tsnprintf roundtrip native\t%s\n" "$$(wc -c < build/shootout_snprintf_rt_native | tr -d ' ')"; \
+		printf "snprintf_rt_wasm_mvp\tsnprintf roundtrip wasm mvp\t%s\n" "$$(wc -c < build/shootout_snprintf_rt_mvp.wasm | tr -d ' ')"; \
+		printf "snprintf_rt_wasm_gcplus\tsnprintf roundtrip wasm gcplus\t%s\n" "$$(wc -c < build/shootout_snprintf_rt_gcplus.wasm | tr -d ' ')"; \
+	} > $(SHOOTOUT_SIZE_ROUNDTRIP_REPORT)
 	@echo ""
-	@echo "=== shootout sizes ==="
+	@echo "=== shootout sizes (format-only) ==="
 	@tab="$$(printf '\t')"; \
 	while IFS="$$tab" read -r id label bytes; do \
 		[ "$$id" = "id" ] && continue; \
 		printf "  %-24s %8s bytes\n" "$${label}:" "$$bytes"; \
 	done < $(SHOOTOUT_SIZE_REPORT)
 	@printf "  report file: %s\n" "$(SHOOTOUT_SIZE_REPORT)"
+	@echo "=== shootout sizes (roundtrip) ==="
+	@tab="$$(printf '\t')"; \
+	while IFS="$$tab" read -r id label bytes; do \
+		[ "$$id" = "id" ] && continue; \
+		printf "  %-24s %8s bytes\n" "$${label}:" "$$bytes"; \
+	done < $(SHOOTOUT_SIZE_ROUNDTRIP_REPORT)
+	@printf "  report file: %s\n" "$(SHOOTOUT_SIZE_ROUNDTRIP_REPORT)"
 
 shootout-report-perf: build/shootout_deep_native build/shootout_deep_mvp.wasm build/shootout_deep_gcplus.wasm
 	@mkdir -p $(SHOOTOUT_REPORT_DIR)
@@ -436,10 +453,16 @@ shootout-report-perf: build/shootout_deep_native build/shootout_deep_mvp.wasm bu
 					case "$$profile:$$candidate" in \
 						native:ryu64) id="ryu64_native"; label="ryu64 native" ;; \
 						native:snprintf) id="snprintf_native"; label="snprintf native" ;; \
+						native:ryu64_rt) id="ryu64_rt_native"; label="ryu64 roundtrip native" ;; \
+						native:snprintf_rt) id="snprintf_rt_native"; label="snprintf roundtrip native" ;; \
 						wasm_mvp:ryu64) id="ryu64_wasm_mvp"; label="ryu64 wasm mvp" ;; \
 						wasm_mvp:snprintf) id="snprintf_wasm_mvp"; label="snprintf wasm mvp" ;; \
+						wasm_mvp:ryu64_rt) id="ryu64_rt_wasm_mvp"; label="ryu64 roundtrip wasm mvp" ;; \
+						wasm_mvp:snprintf_rt) id="snprintf_rt_wasm_mvp"; label="snprintf roundtrip wasm mvp" ;; \
 						wasm_gcplus:ryu64) id="ryu64_wasm_gcplus"; label="ryu64 wasm gcplus" ;; \
 						wasm_gcplus:snprintf) id="snprintf_wasm_gcplus"; label="snprintf wasm gcplus" ;; \
+						wasm_gcplus:ryu64_rt) id="ryu64_rt_wasm_gcplus"; label="ryu64 roundtrip wasm gcplus" ;; \
+						wasm_gcplus:snprintf_rt) id="snprintf_rt_wasm_gcplus"; label="snprintf roundtrip wasm gcplus" ;; \
 						*) id=""; label="" ;; \
 					esac; \
 					[ -z "$$id" ] && continue; \
@@ -475,6 +498,7 @@ shootout-report-html: shootout-report-size shootout-report-perf
 '<style>' \
 'body{font-family:"Avenir Next","Segoe UI","Helvetica Neue",Arial,sans-serif;max-width:1220px;margin:28px auto;padding:0 18px;line-height:1.45;color:#18212a;background:#fafbfc}' \
 'h1{margin:0 0 10px;font-size:1.6rem;letter-spacing:0.01em}' \
+'h2{margin:20px 0 8px;font-size:1.14rem;letter-spacing:0.01em;color:#1e2b38}' \
 '.meta{color:#4a5a6a;margin-bottom:14px}' \
 '.panel{background:#fff;border:1px solid #dce3ea;border-radius:10px;box-shadow:0 6px 18px rgba(30,42,56,0.06);overflow:hidden}' \
 'table{border-collapse:collapse;width:100%}' \
@@ -490,6 +514,7 @@ shootout-report-html: shootout-report-size shootout-report-perf
 '</style></head><body>' \
 '<h1>Shootout Report</h1>' \
 "<div class=\"meta\">Generated: $$generated</div>" \
+'<h2>Format-only</h2>' \
 '<div class="panel">' \
 '<table><thead><tr><th>Program</th><th class="num">Size (bytes)</th><th class="num">ns/conv</th><th>Flags (compiler/linker flags)</th><th class="num">numeric failures</th><th class="num">bit-exact failures</th><th class="num">average characters</th></tr></thead><tbody>' \
 > $(SHOOTOUT_HTML_REPORT)
@@ -506,12 +531,18 @@ shootout-report-html: shootout-report-size shootout-report-perf
 		done < $(SHOOTOUT_PERF_REPORT); \
 		[ -z "$$ns_per_conv" ] && continue; \
 			case "$$id" in \
-				ryu64_native) flags='$(SHOOTOUT_NATIVE_FLAGS_NOTE)' ;; \
-				snprintf_native) flags='native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables (libc snprintf baseline)' ;; \
-				ryu64_wasm_mvp) flags='wasm mvp: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
-				snprintf_wasm_mvp) flags='wasm mvp: -flto wasi-libc build; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
-				ryu64_wasm_gcplus) flags='wasm gcplus: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden +flto; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
-				snprintf_wasm_gcplus) flags='wasm gcplus: -flto wasi-libc build; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
+				ryu64_native) flags='native clean-room formatter ($(SHOOTOUT_NATIVE_FLAGS_NOTE))' ;; \
+				snprintf_native) flags='native libc snprintf baseline' ;; \
+				ryu64_wasm_mvp) flags='wasm mvp clean-room formatter; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_wasm_mvp) flags='wasm mvp libc snprintf baseline; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
+				ryu64_wasm_gcplus) flags='wasm gcplus clean-room formatter; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_wasm_gcplus) flags='wasm gcplus libc snprintf baseline; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
+				ryu64_rt_native) flags='native clean-room formatter + ryu64_from_decimal_full parser' ;; \
+				snprintf_rt_native) flags='native libc snprintf + strtod parser' ;; \
+				ryu64_rt_wasm_mvp) flags='wasm mvp clean-room formatter + ryu64_from_decimal_full parser; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_rt_wasm_mvp) flags='wasm mvp libc snprintf + strtod via wasi-libc; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
+				ryu64_rt_wasm_gcplus) flags='wasm gcplus clean-room formatter + ryu64_from_decimal_full parser; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_rt_wasm_gcplus) flags='wasm gcplus libc snprintf + strtod via wasi-libc; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
 				*) flags='n/a' ;; \
 			esac; \
 		ncls="warn"; [ "$$numeric_fail" = "0" ] && ncls="ok"; \
@@ -519,6 +550,45 @@ shootout-report-html: shootout-report-size shootout-report-perf
 		printf '<tr><td>%s</td><td class="num js-int" data-int="%s">%s</td><td class="num js-fixed1" data-float="%s">%s</td><td class="flags">%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num js-fixed3" data-float="%s">%s</td></tr>\n' \
 			"$$label" "$$bytes" "$$bytes" "$$ns_per_conv" "$$ns_per_conv" "$$flags" "$$ncls" "$$numeric_fail" "$$conversions" "$$numeric_fail" "$$conversions" "$$bcls" "$$bit_fail" "$$conversions" "$$bit_fail" "$$conversions" "$$avg_len" "$$avg_len" >> $(SHOOTOUT_HTML_REPORT); \
 	done < $(SHOOTOUT_SIZE_REPORT)
+	@printf '%s\n' \
+'</tbody></table>' \
+'</div>' \
+'<h2>Roundtrip (format + parse)</h2>' \
+'<div class="panel">' \
+'<table><thead><tr><th>Program</th><th class="num">Size (bytes)</th><th class="num">ns/conv</th><th>Flags (compiler/linker flags)</th><th class="num">numeric failures</th><th class="num">bit-exact failures</th><th class="num">average characters</th></tr></thead><tbody>' \
+>> $(SHOOTOUT_HTML_REPORT)
+	@tab="$$(printf '\t')"; \
+	while IFS="$$tab" read -r id label bytes; do \
+		[ "$$id" = "id" ] && continue; \
+		ns_per_conv=""; conversions=""; avg_len=""; numeric_fail=""; bit_fail=""; \
+		while IFS="$$tab" read -r perf_id perf_label ns elapsed conv avg num bit parse fmt corpus warm rand seed; do \
+			[ "$$perf_id" = "id" ] && continue; \
+			if [ "$$perf_id" = "$$id" ]; then \
+				ns_per_conv="$$ns"; conversions="$$conv"; avg_len="$$avg"; numeric_fail="$$num"; bit_fail="$$bit"; \
+				break; \
+			fi; \
+		done < $(SHOOTOUT_PERF_REPORT); \
+		[ -z "$$ns_per_conv" ] && continue; \
+		case "$$id" in \
+			ryu64_native) flags='native clean-room formatter ($(SHOOTOUT_NATIVE_FLAGS_NOTE))' ;; \
+			snprintf_native) flags='native libc snprintf baseline' ;; \
+			ryu64_wasm_mvp) flags='wasm mvp clean-room formatter; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+			snprintf_wasm_mvp) flags='wasm mvp libc snprintf baseline; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
+			ryu64_wasm_gcplus) flags='wasm gcplus clean-room formatter; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+			snprintf_wasm_gcplus) flags='wasm gcplus libc snprintf baseline; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
+			ryu64_rt_native) flags='native clean-room formatter + ryu64_from_decimal_full parser' ;; \
+			snprintf_rt_native) flags='native libc snprintf + strtod parser' ;; \
+			ryu64_rt_wasm_mvp) flags='wasm mvp clean-room formatter + ryu64_from_decimal_full parser; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+			snprintf_rt_wasm_mvp) flags='wasm mvp libc snprintf + strtod via wasi-libc; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
+			ryu64_rt_wasm_gcplus) flags='wasm gcplus clean-room formatter + ryu64_from_decimal_full parser; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+			snprintf_rt_wasm_gcplus) flags='wasm gcplus libc snprintf + strtod via wasi-libc; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
+			*) flags='n/a' ;; \
+		esac; \
+		ncls="warn"; [ "$$numeric_fail" = "0" ] && ncls="ok"; \
+		bcls="warn"; [ "$$bit_fail" = "0" ] && bcls="ok"; \
+		printf '<tr><td>%s</td><td class="num js-int" data-int="%s">%s</td><td class="num js-fixed1" data-float="%s">%s</td><td class="flags">%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num js-fixed3" data-float="%s">%s</td></tr>\n' \
+			"$$label" "$$bytes" "$$bytes" "$$ns_per_conv" "$$ns_per_conv" "$$flags" "$$ncls" "$$numeric_fail" "$$conversions" "$$numeric_fail" "$$conversions" "$$bcls" "$$bit_fail" "$$conversions" "$$bit_fail" "$$conversions" "$$avg_len" "$$avg_len" >> $(SHOOTOUT_HTML_REPORT); \
+	done < $(SHOOTOUT_SIZE_ROUNDTRIP_REPORT)
 	@tab="$$(printf '\t')"; \
 	corpus_size="0"; warmup="0"; random_count="0"; seed="n/a"; \
 	while IFS="$$tab" read -r id label ns elapsed conv avg num bit parse fmt corpus warm rand seed_value; do \
@@ -531,7 +601,8 @@ shootout-report-html: shootout-report-size shootout-report-perf
 '</div>' \
 '<div class="note">Common flags (all programs): -std=c11 -DNDEBUG -ffunction-sections -fdata-sections.</div>' \
 '<div class="note">WASM variants include post-processing with /opt/homebrew/bin/wasm-opt -Oz --strip-dwarf --strip-producers --vacuum when available.</div>' \
-'<div class="note">ns/conv reports the timed format-only pass. Roundtrip parsing/validation runs in a separate untimed pass.</div>' \
+'<div class="note">Format-only table: ns/conv reports the timed formatter pass; roundtrip checks run in a separate untimed validation pass.</div>' \
+'<div class="note">Roundtrip table: ns/conv reports one timed pass that includes formatting and parsing for each candidate pair.</div>' \
 "<div class=\"note\">Deep benchmark corpus: <span class=\"js-int\" data-int=\"$$corpus_size\">$$corpus_size</span> values; warmup: <span class=\"js-int\" data-int=\"$$warmup\">$$warmup</span>; random subset: <span class=\"js-int\" data-int=\"$$random_count\">$$random_count</span>; seed: $$seed.</div>" \
 '<div class="note muted">`bit-exact failures` are expected for NaN sign/payload normalization differences across format/parse paths.</div>' \
 '<script>' \
@@ -575,22 +646,24 @@ shootout-track: shootout-report-size shootout-report-perf
 	if [ ! -f "$(SHOOTOUT_HISTORY_REPORT)" ]; then \
 		printf "timestamp_utc\tcommit\tid\tlabel\tsize_bytes\tns_per_conv\tnumeric_fail\tbit_fail\tconversions\tavg_len\tcorpus_size\twarmup\trandom_count\tseed\n" > "$(SHOOTOUT_HISTORY_REPORT)"; \
 	fi; \
-	while IFS="$$tab" read -r sid slabel sbytes; do \
-		[ "$$sid" = "id" ] && continue; \
-		found="0"; \
-		while IFS="$$tab" read -r pid plabel pns pelapsed pconv pavg pnum pbit pparse pfmt pcorpus pwarm prandom pseed; do \
-			[ "$$pid" = "id" ] && continue; \
-			if [ "$$pid" = "$$sid" ]; then \
-				printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-					"$$ts" "$$commit" "$$sid" "$$slabel" "$$sbytes" "$$pns" "$$pnum" "$$pbit" "$$pconv" "$$pavg" "$$pcorpus" "$$pwarm" "$$prandom" "$$pseed" >> "$(SHOOTOUT_HISTORY_REPORT)"; \
-				found="1"; \
-				break; \
+	for size_file in "$(SHOOTOUT_SIZE_REPORT)" "$(SHOOTOUT_SIZE_ROUNDTRIP_REPORT)"; do \
+		while IFS="$$tab" read -r sid slabel sbytes; do \
+			[ "$$sid" = "id" ] && continue; \
+			found="0"; \
+			while IFS="$$tab" read -r pid plabel pns pelapsed pconv pavg pnum pbit pparse pfmt pcorpus pwarm prandom pseed; do \
+				[ "$$pid" = "id" ] && continue; \
+				if [ "$$pid" = "$$sid" ]; then \
+					printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+						"$$ts" "$$commit" "$$sid" "$$slabel" "$$sbytes" "$$pns" "$$pnum" "$$pbit" "$$pconv" "$$pavg" "$$pcorpus" "$$pwarm" "$$prandom" "$$pseed" >> "$(SHOOTOUT_HISTORY_REPORT)"; \
+					found="1"; \
+					break; \
+				fi; \
+			done < "$(SHOOTOUT_PERF_REPORT)"; \
+			if [ "$$found" != "1" ]; then \
+				echo "shootout track warning: missing perf row for $$sid"; \
 			fi; \
-		done < "$(SHOOTOUT_PERF_REPORT)"; \
-		if [ "$$found" != "1" ]; then \
-			echo "shootout track warning: missing perf row for $$sid"; \
-		fi; \
-	done < "$(SHOOTOUT_SIZE_REPORT)"
+		done < "$$size_file"; \
+	done
 	@printf "  history log: %s\n" "$(SHOOTOUT_HISTORY_REPORT)"
 
 build/shootout_ryu64_native: $(SRC_FMT_FULL) shootout/ryu64_print.c shootout/values.h
@@ -626,6 +699,36 @@ build/shootout_ryu64_gcplus.wasm: build/shootout_ryu64_gcplus_raw.wasm
 build/shootout_ryu64.wasm: build/shootout_ryu64_gcplus.wasm
 	cp $< $@
 
+build/shootout_ryu64_rt_native: $(SRC_FULL) shootout/ryu64_roundtrip.c shootout/values.h
+	@mkdir -p build
+	$(CC) $(SHOOTOUT_NATIVE_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -Iinclude -Ishootout \
+		$(SRC_FULL) shootout/ryu64_roundtrip.c \
+		-o $@ $(SIZE_LDFLAGS) $(LIBS_MATH) -flto
+	strip $@
+
+build/shootout_ryu64_rt_mvp_raw.wasm: $(SRC_FULL) shootout/ryu64_roundtrip.c wasi/wasi_start.c wasm_compat/string.c shootout/values.h wasi/wasi_io.h
+	@mkdir -p build
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_MVP_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU64_WASI_BUILD \
+		-Iwasm_compat -Iinclude -Iwasi -Ishootout \
+		$(SRC_FULL) shootout/ryu64_roundtrip.c wasi/wasi_start.c wasm_compat/string.c \
+		$(WASI_BUILTINS) -o $@ \
+		$(SHOOTOUT_WASI_MVP_LDFLAGS)
+
+build/shootout_ryu64_rt_mvp.wasm: build/shootout_ryu64_rt_mvp_raw.wasm
+	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) --strip-target-features $< -o $@
+	wasm-tools validate --features=mvp $@
+
+build/shootout_ryu64_rt_gcplus_raw.wasm: $(SRC_FULL) shootout/ryu64_roundtrip.c wasi/wasi_start.c wasm_compat/string.c shootout/values.h wasi/wasi_io.h
+	@mkdir -p build
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_GCPLUS_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -DRYU64_WASI_BUILD \
+		-Iwasm_compat -Iinclude -Iwasi -Ishootout \
+		$(SRC_FULL) shootout/ryu64_roundtrip.c wasi/wasi_start.c wasm_compat/string.c \
+		$(WASI_BUILTINS) -o $@ \
+		$(SHOOTOUT_WASI_GCPLUS_LDFLAGS)
+
+build/shootout_ryu64_rt_gcplus.wasm: build/shootout_ryu64_rt_gcplus_raw.wasm
+	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) $< -o $@
+
 build/shootout_snprintf_native: shootout/snprintf_print.c shootout/values.h
 	@mkdir -p build
 	$(CC) $(SHOOTOUT_NATIVE_CFLAGS) -Ishootout \
@@ -655,27 +758,53 @@ build/shootout_snprintf_gcplus.wasm: build/shootout_snprintf_gcplus_raw.wasm
 build/shootout_snprintf.wasm: build/shootout_snprintf_gcplus.wasm
 	cp $< $@
 
-build/shootout_deep_native: $(SRC_FMT_FULL) shootout/deep_bench.c
+build/shootout_snprintf_rt_native: shootout/snprintf_roundtrip.c shootout/values.h
 	@mkdir -p build
-	$(CC) $(SHOOTOUT_NATIVE_CFLAGS) -DRYU_TIER_FULL -Iinclude -Ishootout \
-		$(SRC_FMT_FULL) shootout/deep_bench.c \
+	$(CC) $(SHOOTOUT_NATIVE_CFLAGS) -Ishootout \
+		shootout/snprintf_roundtrip.c \
+		-o $@ $(SIZE_LDFLAGS) -flto
+	strip $@
+
+build/shootout_snprintf_rt_mvp_raw.wasm: shootout/snprintf_roundtrip.c shootout/values.h
+	@mkdir -p build
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_MVP_CFLAGS) -Ishootout \
+		shootout/snprintf_roundtrip.c \
+		-o $@ -Wl,--gc-sections -Wl,--strip-all -flto
+
+build/shootout_snprintf_rt_mvp.wasm: build/shootout_snprintf_rt_mvp_raw.wasm
+	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) --strip-target-features --disable-bulk-memory --disable-bulk-memory-opt --llvm-memory-copy-fill-lowering $< -o $@
+	wasm-tools validate --features=mvp $@
+
+build/shootout_snprintf_rt_gcplus_raw.wasm: shootout/snprintf_roundtrip.c shootout/values.h
+	@mkdir -p build
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS) -Ishootout \
+		shootout/snprintf_roundtrip.c \
+		-o $@ -Wl,--gc-sections -Wl,--strip-all -flto
+
+build/shootout_snprintf_rt_gcplus.wasm: build/shootout_snprintf_rt_gcplus_raw.wasm
+	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) $< -o $@
+
+build/shootout_deep_native: $(SRC_FULL) shootout/deep_bench.c
+	@mkdir -p build
+	$(CC) $(SHOOTOUT_NATIVE_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -Iinclude -Ishootout \
+		$(SRC_FULL) shootout/deep_bench.c \
 		-o $@ $(SIZE_LDFLAGS) $(LIBS_MATH) -flto
 	strip $@
 
-build/shootout_deep_mvp_raw.wasm: $(SRC_FMT_FULL) shootout/deep_bench.c
+build/shootout_deep_mvp_raw.wasm: $(SRC_FULL) shootout/deep_bench.c
 	@mkdir -p build
-	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_MVP_CFLAGS) -DRYU_TIER_FULL -Iinclude -Ishootout \
-		$(SRC_FMT_FULL) shootout/deep_bench.c \
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_MVP_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -Iinclude -Ishootout \
+		$(SRC_FULL) shootout/deep_bench.c \
 		-o $@ -Wl,--gc-sections -Wl,--strip-all -flto
 
 build/shootout_deep_mvp.wasm: build/shootout_deep_mvp_raw.wasm
 	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) --strip-target-features --disable-bulk-memory --disable-bulk-memory-opt --llvm-memory-copy-fill-lowering $< -o $@
 	wasm-tools validate --features=mvp $@
 
-build/shootout_deep_gcplus_raw.wasm: $(SRC_FMT_FULL) shootout/deep_bench.c
+build/shootout_deep_gcplus_raw.wasm: $(SRC_FULL) shootout/deep_bench.c
 	@mkdir -p build
-	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS) -DRYU_TIER_FULL -Iinclude -Ishootout \
-		$(SRC_FMT_FULL) shootout/deep_bench.c \
+	$(WASI_CC_CMD) $(SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS) -DRYU_TIER_FULL -DRYU64_ENABLE_PARSE_BIGINT -Iinclude -Ishootout \
+		$(SRC_FULL) shootout/deep_bench.c \
 		-o $@ -Wl,--gc-sections -Wl,--strip-all -flto
 
 build/shootout_deep_gcplus.wasm: build/shootout_deep_gcplus_raw.wasm

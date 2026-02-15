@@ -32,8 +32,10 @@ typedef struct {
   int special; /* 0=none, 1=inf, 2=nan */
   int saw_any_digit;
   int saw_nonzero;
+  int sig_is_u64;
   int truncated;
   int dropped_nonzero;
+  uint64_t sig_u64;
   long long sig_digits;
   long long dropped_digits;
   long long exp10;
@@ -598,6 +600,14 @@ static int ryu_parse_append_digit(ryu_full_parsed* p, unsigned digit) {
     }
     return 1;
   }
+  if (p->sig_is_u64) {
+    if (p->sig_u64 <= (UINT64_MAX - (uint64_t)digit) / UINT64_C(10)) {
+      p->sig_u64 = p->sig_u64 * UINT64_C(10) + (uint64_t)digit;
+      return 1;
+    }
+    p->sig_is_u64 = 0;
+    ryu_bigint_from_u64(&p->sig, p->sig_u64);
+  }
   if (!ryu_bigint_mul10_add_digit(&p->sig, digit)) {
     p->truncated = 1;
     p->dropped_digits = 1;
@@ -617,8 +627,10 @@ static ryu_parse_status ryu_parse_full_decimal_lex(
   out->special = 0;
   out->saw_any_digit = 0;
   out->saw_nonzero = 0;
+  out->sig_is_u64 = 1;
   out->truncated = 0;
   out->dropped_nonzero = 0;
+  out->sig_u64 = 0u;
   out->sig_digits = 0;
   out->dropped_digits = 0;
   out->exp10 = 0;
@@ -731,6 +743,8 @@ static ryu_parse_status ryu_parse_full_decimal_lex(
 
   out->parsed_len = end_pos;
   if (!out->saw_nonzero) {
+    out->sig_is_u64 = 1;
+    out->sig_u64 = 0u;
     ryu_bigint_zero(&out->sig);
   }
   return RYU_PARSE_OK;
@@ -1052,8 +1066,9 @@ static ryu_parse_status ryu_convert_ratio_to_double(
 }
 
 ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
-  ryu64_parse_result tiny_fast;
   ryu_parse_bigint_ws ws;
+  ryu_bigint sig_storage;
+  const ryu_bigint* sig_ref;
   ryu_full_parsed p;
   ryu_parse_status st;
   long long dec_exp10;
@@ -1061,23 +1076,6 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
 
   if (s == NULL) {
     return ryu_parse_result_make(RYU_PARSE_INVALID, 0.0, 0u);
-  }
-
-  tiny_fast = ryu64_from_decimal_tiny(s, n);
-  if (tiny_fast.status == RYU_PARSE_OK || tiny_fast.status == RYU_PARSE_INEXACT) {
-    size_t i = 0u;
-    while (i < n && ryu_ascii_isspace(s[i])) {
-      i += 1u;
-    }
-    if (i < n && (s[i] == '+' || s[i] == '-')) {
-      i += 1u;
-    }
-    if (i < n) {
-      char c = ryu_ascii_lower(s[i]);
-      if (c != 'n' && c != 'i') {
-        return tiny_fast;
-      }
-    }
   }
 
   st = ryu_parse_full_decimal_lex(s, n, &p);
@@ -1112,17 +1110,24 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
       p.exp10 >= -(long long)RYU_PARSE_FAST_MAX_NEG_EXP10 &&
       p.exp10 <= (long long)RYU_PARSE_FAST_MAX_POS_EXP10) {
     uint64_t m = 0u;
-    if (ryu_bigint_to_u64(&p.sig, &m)) {
+    if (p.sig_is_u64) {
+      m = p.sig_u64;
+    } else if (!ryu_bigint_to_u64(&p.sig, &m)) {
+      m = 0u;
+    }
+    if (m != 0u) {
       st = ryu_fast_mq_to_double(p.negative, m, (int)p.exp10, &value);
-      if (st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT) {
-        return ryu_parse_result_make(st, value, p.parsed_len);
-      }
-      if (st == RYU_PARSE_OVERFLOW) {
-        return ryu_parse_overflow_result(p.negative, p.parsed_len);
-      }
-      if (st == RYU_PARSE_UNDERFLOW) {
-        return ryu_parse_underflow_result(p.negative, p.parsed_len);
-      }
+    } else {
+      st = RYU_PARSE_INVALID;
+    }
+    if (st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT) {
+      return ryu_parse_result_make(st, value, p.parsed_len);
+    }
+    if (st == RYU_PARSE_OVERFLOW) {
+      return ryu_parse_overflow_result(p.negative, p.parsed_len);
+    }
+    if (st == RYU_PARSE_UNDERFLOW) {
+      return ryu_parse_underflow_result(p.negative, p.parsed_len);
     }
   }
 
@@ -1138,7 +1143,14 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
     return ryu_resolve_truncated_decimal(&p, &ws);
   }
 
-  st = ryu_convert_decimal_bigint_to_double(p.negative, &p.sig, 0u, p.exp10, &ws, &value);
+  if (p.sig_is_u64) {
+    ryu_bigint_from_u64(&sig_storage, p.sig_u64);
+    sig_ref = &sig_storage;
+  } else {
+    sig_ref = &p.sig;
+  }
+
+  st = ryu_convert_decimal_bigint_to_double(p.negative, sig_ref, 0u, p.exp10, &ws, &value);
   return ryu_result_from_convert_status(st, p.negative, p.parsed_len, value);
 }
 

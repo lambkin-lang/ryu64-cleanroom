@@ -96,6 +96,8 @@ typedef int (*format_fn)(char* out, size_t out_cap, double x, size_t* out_len);
 typedef struct {
   const char* id;
   format_fn fn;
+  int timed_roundtrip;
+  int (*parse)(const char* text, double* out_value);
 } candidate;
 
 static uint64_t bits_from_double(double x) {
@@ -588,6 +590,106 @@ static int parse_decimal_text(const char* text, double* out_value) {
   return end != NULL && *end == '\0' && end != text;
 }
 
+static int parse_status_success(ryu_parse_status st) {
+  return st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT;
+}
+
+static int parse_decimal_text_ryu_full(const char* text, double* out_value) {
+  size_t n = strlen(text);
+  ryu64_parse_result r = ryu64_from_decimal_full(text, n);
+  if (!parse_status_success(r.status) || r.parsed_len != n) {
+    return 0;
+  }
+  *out_value = r.value;
+  return 1;
+}
+
+static void record_parse_failure(
+    bench_result* out,
+    const bench_options* opt,
+    uint64_t in_bits,
+    const char* text) {
+  out->parse_fail += 1u;
+  out->numeric_fail += 1u;
+  out->bit_fail += 1u;
+  add_sample(
+      out->numeric_samples,
+      &out->numeric_sample_count,
+      opt->sample_limit,
+      in_bits,
+      0,
+      0u,
+      text);
+  add_sample(
+      out->bit_samples,
+      &out->bit_sample_count,
+      opt->sample_limit,
+      in_bits,
+      0,
+      0u,
+      text);
+}
+
+static void record_format_failure(
+    bench_result* out,
+    const bench_options* opt,
+    uint64_t in_bits) {
+  out->format_fail += 1u;
+  out->numeric_fail += 1u;
+  out->bit_fail += 1u;
+  add_sample(
+      out->numeric_samples,
+      &out->numeric_sample_count,
+      opt->sample_limit,
+      in_bits,
+      0,
+      0u,
+      "<format-fail>");
+  add_sample(
+      out->bit_samples,
+      &out->bit_sample_count,
+      opt->sample_limit,
+      in_bits,
+      0,
+      0u,
+      "<format-fail>");
+}
+
+static void record_parse_compare(
+    bench_result* out,
+    const bench_options* opt,
+    uint64_t in_bits,
+    double in_value,
+    double parsed_value,
+    const char* text) {
+  uint64_t parsed_bits = bits_from_double(parsed_value);
+  int numeric_ok = numeric_equal(in_value, parsed_value);
+  int bit_ok = (in_bits == parsed_bits);
+
+  if (!numeric_ok) {
+    out->numeric_fail += 1u;
+    add_sample(
+        out->numeric_samples,
+        &out->numeric_sample_count,
+        opt->sample_limit,
+        in_bits,
+        1,
+        parsed_bits,
+        text);
+  }
+  if (!bit_ok) {
+    out->bit_fail += 1u;
+    add_sample(
+        out->bit_samples,
+        &out->bit_sample_count,
+        opt->sample_limit,
+        in_bits,
+        1,
+        parsed_bits,
+        text);
+  }
+}
+
 static int format_ryu64(char* out, size_t out_cap, double x, size_t* out_len) {
   static const ryu_printf_spec kSpec = {
       RYU_FMT_G,
@@ -650,6 +752,14 @@ static int run_candidate(
     size_t out_len = 0u;
     double x = double_from_bits(corpus_values->data[i]);
     if (cand->fn(buf, sizeof(buf), x, &out_len)) {
+      if (cand->timed_roundtrip) {
+        double parsed = 0.0;
+        if (cand->parse == NULL || !cand->parse(buf, &parsed)) {
+          out->checksum ^= UINT64_C(0x9e3779b97f4a7c15);
+        } else {
+          out->checksum ^= bits_from_double(parsed);
+        }
+      }
       out->checksum ^= (uint64_t)(unsigned char)buf[0];
       out->checksum ^= (uint64_t)out_len << 16u;
     }
@@ -660,11 +770,26 @@ static int run_candidate(
     uint64_t in_bits = corpus_values->data[i];
     double x = double_from_bits(in_bits);
     size_t out_len = 0u;
-    if (cand->fn(buf, sizeof(buf), x, &out_len)) {
-      out->checksum ^= (uint64_t)(unsigned char)buf[0];
-      out->checksum ^= ((uint64_t)out_len << 8u);
-      len_sum += out_len;
-      len_count += 1u;
+    int format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
+    if (!format_ok) {
+      if (cand->timed_roundtrip) {
+        record_format_failure(out, opt, in_bits);
+      }
+      continue;
+    }
+
+    out->checksum ^= (uint64_t)(unsigned char)buf[0];
+    out->checksum ^= ((uint64_t)out_len << 8u);
+    len_sum += out_len;
+    len_count += 1u;
+
+    if (cand->timed_roundtrip) {
+      double parsed = 0.0;
+      if (cand->parse == NULL || !cand->parse(buf, &parsed)) {
+        record_parse_failure(out, opt, in_bits, buf);
+      } else {
+        record_parse_compare(out, opt, in_bits, x, parsed, buf);
+      }
     }
   }
   t1 = now_ns();
@@ -677,93 +802,26 @@ static int run_candidate(
     out->avg_len = (double)len_sum / (double)len_count;
   }
 
-  /*
-   * Validation is intentionally outside the timed formatting loop so roundtrip
-   * parsing does not contaminate formatting ns/conv.
-   */
-  for (i = 0u; i < corpus_values->len; ++i) {
-    uint64_t in_bits = corpus_values->data[i];
-    uint64_t parsed_bits = 0u;
-    double x = double_from_bits(in_bits);
-    double parsed = 0.0;
-    size_t out_len = 0u;
-    int format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
-    int parse_ok = 0;
-    int numeric_ok = 0;
-    int bit_ok = 0;
-
-    if (!format_ok) {
-      out->format_fail += 1u;
-      out->numeric_fail += 1u;
-      out->bit_fail += 1u;
-      add_sample(
-          out->numeric_samples,
-          &out->numeric_sample_count,
-          opt->sample_limit,
-          in_bits,
-          0,
-          0u,
-          "<format-fail>");
-      add_sample(
-          out->bit_samples,
-          &out->bit_sample_count,
-          opt->sample_limit,
-          in_bits,
-          0,
-          0u,
-          "<format-fail>");
-      continue;
-    }
-
-    parse_ok = parse_decimal_text(buf, &parsed);
-    if (!parse_ok) {
-      out->parse_fail += 1u;
-      out->numeric_fail += 1u;
-      out->bit_fail += 1u;
-      add_sample(
-          out->numeric_samples,
-          &out->numeric_sample_count,
-          opt->sample_limit,
-          in_bits,
-          0,
-          0u,
-          buf);
-      add_sample(
-          out->bit_samples,
-          &out->bit_sample_count,
-          opt->sample_limit,
-          in_bits,
-          0,
-          0u,
-          buf);
-      continue;
-    }
-
-    parsed_bits = bits_from_double(parsed);
-    numeric_ok = numeric_equal(x, parsed);
-    bit_ok = (in_bits == parsed_bits);
-
-    if (!numeric_ok) {
-      out->numeric_fail += 1u;
-      add_sample(
-          out->numeric_samples,
-          &out->numeric_sample_count,
-          opt->sample_limit,
-          in_bits,
-          1,
-          parsed_bits,
-          buf);
-    }
-    if (!bit_ok) {
-      out->bit_fail += 1u;
-      add_sample(
-          out->bit_samples,
-          &out->bit_sample_count,
-          opt->sample_limit,
-          in_bits,
-          1,
-          parsed_bits,
-          buf);
+  if (!cand->timed_roundtrip) {
+    /*
+     * Validation is intentionally outside the timed formatting loop so
+     * roundtrip parsing does not contaminate format-only ns/conv.
+     */
+    for (i = 0u; i < corpus_values->len; ++i) {
+      uint64_t in_bits = corpus_values->data[i];
+      double x = double_from_bits(in_bits);
+      double parsed = 0.0;
+      size_t out_len = 0u;
+      int format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
+      if (!format_ok) {
+        record_format_failure(out, opt, in_bits);
+        continue;
+      }
+      if (!parse_decimal_text(buf, &parsed)) {
+        record_parse_failure(out, opt, in_bits, buf);
+        continue;
+      }
+      record_parse_compare(out, opt, in_bits, x, parsed, buf);
     }
   }
   return 1;
@@ -894,9 +952,9 @@ static void print_result(const bench_result* r) {
 int main(int argc, char** argv) {
   bench_options opt;
   corpus c;
-  bench_result results[2];
+  bench_result results[4];
   size_t warmup_applied = 0u;
-  candidate candidates[2];
+  candidate candidates[4];
   size_t i;
 
   if (!parse_args(argc, argv, &opt)) {
@@ -929,10 +987,22 @@ int main(int argc, char** argv) {
 
   candidates[0].id = "ryu64";
   candidates[0].fn = format_ryu64;
+  candidates[0].timed_roundtrip = 0;
+  candidates[0].parse = NULL;
   candidates[1].id = "snprintf";
   candidates[1].fn = format_snprintf17g;
+  candidates[1].timed_roundtrip = 0;
+  candidates[1].parse = NULL;
+  candidates[2].id = "ryu64_rt";
+  candidates[2].fn = format_ryu64;
+  candidates[2].timed_roundtrip = 1;
+  candidates[2].parse = parse_decimal_text_ryu_full;
+  candidates[3].id = "snprintf_rt";
+  candidates[3].fn = format_snprintf17g;
+  candidates[3].timed_roundtrip = 1;
+  candidates[3].parse = parse_decimal_text;
 
-  for (i = 0u; i < 2u; ++i) {
+  for (i = 0u; i < 4u; ++i) {
     if (!run_candidate(&candidates[i], &c.values, &opt, &results[i])) {
       fprintf(stderr, "candidate run failed: %s\n", candidates[i].id);
       corpus_free(&c);
@@ -941,7 +1011,7 @@ int main(int argc, char** argv) {
     print_result(&results[i]);
   }
 
-  for (i = 0u; i < 2u; ++i) {
+  for (i = 0u; i < 4u; ++i) {
     free_result(&results[i]);
   }
   corpus_free(&c);
