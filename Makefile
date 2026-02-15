@@ -117,7 +117,7 @@ DEPS = \
 	$(OBJ_WASI_GCPLUS:.o=.d) \
 	build/test/test_ryu64.d
 
-.PHONY: all tiny full test oracle-test benchmark-speed benchmark-size wasm-tiny nolibc-check-speed nolibc-check-size wasm-mvp wasm-gcplus wasm-run wasm-run-mvp wasm-run-gcplus wasm-compare shootout shootout-bench shootout-report shootout-report-size shootout-report-perf shootout-report-html gen-parse-pow10 clean
+.PHONY: all tiny full test oracle-test benchmark-speed benchmark-size wasm-tiny nolibc-check-speed nolibc-check-size wasm-mvp wasm-gcplus wasm-run wasm-run-mvp wasm-run-gcplus wasm-compare shootout shootout-bench shootout-report shootout-report-size shootout-report-perf shootout-report-html shootout-track gen-parse-pow10 clean
 
 all: full
 
@@ -306,13 +306,17 @@ build/gen_pow10_u128: tools/gen_pow10_u128.c
 
 # --- shootout: ryu64-full vs snprintf size comparison ---
 
-SHOOTOUT_NATIVE_CFLAGS = -std=c11 -Oz -DNDEBUG -flto \
+SHOOTOUT_NATIVE_CFLAGS = -std=c11 -O2 -DNDEBUG -flto \
 	-ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables
+SHOOTOUT_NATIVE_ENABLE_POW5_CACHE ?= 1
+SHOOTOUT_NATIVE_POW5_STRIDE ?= 16
+SHOOTOUT_NATIVE_FLAGS_NOTE = native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables -DRYU_TIER_FULL
 SHOOTOUT_REPORT_DIR ?= build/reports
 SHOOTOUT_SIZE_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_size.tsv
 SHOOTOUT_PERF_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_perf.tsv
 SHOOTOUT_PERF_FAILURE_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_perf_failures.tsv
 SHOOTOUT_HTML_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_report.html
+SHOOTOUT_HISTORY_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_history.tsv
 SHOOTOUT_DEEP_RANDOM ?= 224624
 SHOOTOUT_DEEP_SEED ?= 0x9e3779b97f4a7c15
 SHOOTOUT_DEEP_WARMUP ?= 1000
@@ -331,6 +335,10 @@ SHOOTOUT_WASI_LIBC_MVP_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_MVP_FEATURE_
 SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_GCPLUS_FEATURE_FLAGS)
 SHOOTOUT_WASI_MVP_LDFLAGS = -nostdlib -Wl,--entry=_start -Wl,--export=_start -Wl,--gc-sections -Wl,--strip-all
 SHOOTOUT_WASI_GCPLUS_LDFLAGS = -nostdlib -Wl,--entry=_start -Wl,--export=_start -Wl,--gc-sections -Wl,--strip-all
+ifeq ($(SHOOTOUT_NATIVE_ENABLE_POW5_CACHE),1)
+  SHOOTOUT_NATIVE_CFLAGS += -DRYU_ENABLE_POW5_STRIDE_CACHE=1 -DRYU_POW5_STRIDE=$(SHOOTOUT_NATIVE_POW5_STRIDE)
+  SHOOTOUT_NATIVE_FLAGS_NOTE += + pow5-stride-cache
+endif
 ifeq ($(WASI_ENABLE_LTO),1)
   SHOOTOUT_WASI_GCPLUS_CFLAGS += -flto
   SHOOTOUT_WASI_GCPLUS_LDFLAGS += -flto
@@ -353,7 +361,7 @@ shootout: shootout-report-size build/shootout_ryu64_native build/shootout_ryu64_
 
 shootout-bench: shootout-report-perf
 
-shootout-report: shootout-report-html
+shootout-report: shootout-report-html shootout-track
 
 shootout-report-size: build/shootout_ryu64_native build/shootout_ryu64_mvp.wasm build/shootout_ryu64_gcplus.wasm build/shootout_snprintf_native build/shootout_snprintf_mvp.wasm build/shootout_snprintf_gcplus.wasm
 	@mkdir -p $(SHOOTOUT_REPORT_DIR)
@@ -489,8 +497,8 @@ shootout-report-html: shootout-report-size shootout-report-perf
 			fi; \
 		done < $(SHOOTOUT_PERF_REPORT); \
 		[ -z "$$ns_per_conv" ] && continue; \
-		case "$$id" in \
-			ryu64_native) flags='native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables -DRYU_TIER_FULL' ;; \
+			case "$$id" in \
+				ryu64_native) flags='$(SHOOTOUT_NATIVE_FLAGS_NOTE)' ;; \
 			snprintf_native) flags='native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables (libc snprintf baseline)' ;; \
 			ryu64_wasm_mvp) flags='wasm mvp: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
 			snprintf_wasm_mvp) flags='wasm mvp: -flto wasi-libc build; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
@@ -513,7 +521,7 @@ shootout-report-html: shootout-report-size shootout-report-perf
 	printf '%s\n' \
 '</tbody></table>' \
 '</div>' \
-'<div class="note">Common flags (all programs): -std=c11 -Oz -DNDEBUG -ffunction-sections -fdata-sections.</div>' \
+'<div class="note">Common flags (all programs): -std=c11 -DNDEBUG -ffunction-sections -fdata-sections.</div>' \
 '<div class="note">WASM variants include post-processing with /opt/homebrew/bin/wasm-opt -Oz --strip-dwarf --strip-producers --vacuum when available.</div>' \
 "<div class=\"note\">Deep benchmark corpus: <span class=\"js-int\" data-int=\"$$corpus_size\">$$corpus_size</span> values; warmup: <span class=\"js-int\" data-int=\"$$warmup\">$$warmup</span>; random subset: <span class=\"js-int\" data-int=\"$$random_count\">$$random_count</span>; seed: $$seed.</div>" \
 '<div class="note muted">`bit-exact failures` are expected for NaN sign/payload normalization differences across format/parse paths.</div>' \
@@ -546,6 +554,35 @@ shootout-report-html: shootout-report-size shootout-report-perf
 '</body></html>' \
 >> $(SHOOTOUT_HTML_REPORT)
 	@printf "  html report: %s\n" "$(SHOOTOUT_HTML_REPORT)"
+
+shootout-track: shootout-report-size shootout-report-perf
+	@mkdir -p $(SHOOTOUT_REPORT_DIR)
+	@tab="$$(printf '\t')"; \
+	ts="$$(date -u '+%Y-%m-%d %H:%M:%S UTC')"; \
+	commit="$$(git rev-parse --short=12 HEAD 2>/dev/null || printf '%s' 'unknown')"; \
+	if git rev-parse --git-dir >/dev/null 2>&1 && ! git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then \
+		commit="$${commit}-dirty"; \
+	fi; \
+	if [ ! -f "$(SHOOTOUT_HISTORY_REPORT)" ]; then \
+		printf "timestamp_utc\tcommit\tid\tlabel\tsize_bytes\tns_per_conv\tnumeric_fail\tbit_fail\tconversions\tavg_len\tcorpus_size\twarmup\trandom_count\tseed\n" > "$(SHOOTOUT_HISTORY_REPORT)"; \
+	fi; \
+	while IFS="$$tab" read -r sid slabel sbytes; do \
+		[ "$$sid" = "id" ] && continue; \
+		found="0"; \
+		while IFS="$$tab" read -r pid plabel pns pelapsed pconv pavg pnum pbit pparse pfmt pcorpus pwarm prandom pseed; do \
+			[ "$$pid" = "id" ] && continue; \
+			if [ "$$pid" = "$$sid" ]; then \
+				printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+					"$$ts" "$$commit" "$$sid" "$$slabel" "$$sbytes" "$$pns" "$$pnum" "$$pbit" "$$pconv" "$$pavg" "$$pcorpus" "$$pwarm" "$$prandom" "$$pseed" >> "$(SHOOTOUT_HISTORY_REPORT)"; \
+				found="1"; \
+				break; \
+			fi; \
+		done < "$(SHOOTOUT_PERF_REPORT)"; \
+		if [ "$$found" != "1" ]; then \
+			echo "shootout track warning: missing perf row for $$sid"; \
+		fi; \
+	done < "$(SHOOTOUT_SIZE_REPORT)"
+	@printf "  history log: %s\n" "$(SHOOTOUT_HISTORY_REPORT)"
 
 build/shootout_ryu64_native: $(SRC_FMT_FULL) shootout/ryu64_print.c shootout/values.h
 	@mkdir -p build

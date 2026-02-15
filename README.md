@@ -159,11 +159,21 @@ Oracle/benchmark program:
     - `build/reports/shootout_size.tsv`
     - `build/reports/shootout_perf.tsv`
     - `build/reports/shootout_perf_failures.tsv`
+  - longitudinal tracking:
+    - `make shootout-report` automatically appends a snapshot row-set to:
+      - `build/reports/shootout_history.tsv`
+    - each snapshot records UTC timestamp, commit id (with `-dirty` suffix when applicable), program id/label, size bytes, ns/conv, numeric failures, bit-exact failures, conversion count, average output length, corpus size, warmup, random count, and seed
+    - you can append without regenerating HTML via:
+      - `make shootout-track`
   - deep perf knobs (override on make command line):
     - `SHOOTOUT_DEEP_RANDOM` (default `224624`)
     - `SHOOTOUT_DEEP_SEED` (default `0x9e3779b97f4a7c15`)
     - `SHOOTOUT_DEEP_WARMUP` (default `1000`)
     - `SHOOTOUT_DEEP_SAMPLES` (default `8`)
+  - native speed-profile knobs:
+    - `SHOOTOUT_NATIVE_ENABLE_POW5_CACHE` (default `1`) enables a clean-room pow5 stride cache in native shootout/deep builds
+    - `SHOOTOUT_NATIVE_POW5_STRIDE` (default `16`) controls anchor spacing for that cache
+    - these knobs only affect native shootout/deep targets; wasm targets stay unchanged unless explicitly configured
 - Non-oracle compile checks are provided via `nolibc-check-speed` and `nolibc-check-size`.
 - Optional exhaustive subnormal parser sweep:
   - `RYU_EXHAUSTIVE_SUBNORMAL_LIMIT=<N> make test`

@@ -308,6 +308,122 @@ static int ryu_bigint_div_small(ryu_bigint* a, uint32_t div, uint32_t* rem_out) 
   return 1;
 }
 
+#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+static int ryu_bigint_mul_u64(ryu_bigint* a, uint64_t m) {
+  uint32_t lo;
+  uint64_t hi64;
+  uint32_t hi;
+  ryu_bigint hi_term;
+
+  if (m == 0u) {
+    ryu_bigint_zero(a);
+    return 1;
+  }
+  if (m < (uint64_t)RYU_BIGINT_BASE) {
+    return ryu_bigint_mul_small(a, (uint32_t)m);
+  }
+
+  lo = (uint32_t)(m % (uint64_t)RYU_BIGINT_BASE);
+  hi64 = m / (uint64_t)RYU_BIGINT_BASE;
+  if (hi64 > (uint64_t)UINT32_MAX) {
+    return 0;
+  }
+  hi = (uint32_t)hi64;
+  if (hi == 0u) {
+    return ryu_bigint_mul_small(a, lo);
+  }
+
+  ryu_bigint_copy(&hi_term, a);
+  if (!ryu_bigint_mul_small(a, lo)) {
+    return 0;
+  }
+  if (!ryu_bigint_mul_small(&hi_term, hi)) {
+    return 0;
+  }
+  if (!ryu_bigint_is_zero(&hi_term)) {
+    if (hi_term.len + 1u > RYU_BIGINT_MAX_LIMBS) {
+      return 0;
+    }
+    memmove(hi_term.limb + 1u, hi_term.limb, hi_term.len * sizeof(uint32_t));
+    hi_term.limb[0] = 0u;
+    hi_term.len += 1u;
+    if (!ryu_bigint_add(a, &hi_term)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+#endif
+
+#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+#ifndef RYU_POW5_STRIDE
+#define RYU_POW5_STRIDE 16u
+#endif
+#if (RYU_POW5_STRIDE == 0u)
+#error "RYU_POW5_STRIDE must be > 0"
+#endif
+#define RYU_POW5_MAX_EXP 1074u
+#define RYU_POW5_ANCHOR_COUNT ((RYU_POW5_MAX_EXP / RYU_POW5_STRIDE) + 1u)
+
+static ryu_bigint g_pow5_anchor[RYU_POW5_ANCHOR_COUNT];
+static int g_pow5_anchor_state = 0; /* 0=uninitialized, 1=initializing, 2=ready */
+
+static int ryu_init_pow5_anchor_cache(void) {
+  unsigned i;
+  int expected;
+
+  if (__atomic_load_n(&g_pow5_anchor_state, __ATOMIC_ACQUIRE) == 2) {
+    return 1;
+  }
+
+  expected = 0;
+  if (__atomic_compare_exchange_n(
+          &g_pow5_anchor_state,
+          &expected,
+          1,
+          0,
+          __ATOMIC_ACQ_REL,
+          __ATOMIC_ACQUIRE)) {
+    ryu_bigint_from_u64(&g_pow5_anchor[0], 1u);
+    for (i = 1u; i < RYU_POW5_ANCHOR_COUNT; ++i) {
+      ryu_bigint_copy(&g_pow5_anchor[i], &g_pow5_anchor[i - 1u]);
+      if (!ryu_bigint_mul_pow5(&g_pow5_anchor[i], RYU_POW5_STRIDE)) {
+        __atomic_store_n(&g_pow5_anchor_state, 0, __ATOMIC_RELEASE);
+        return 0;
+      }
+    }
+    __atomic_store_n(&g_pow5_anchor_state, 2, __ATOMIC_RELEASE);
+    return 1;
+  }
+
+  while (__atomic_load_n(&g_pow5_anchor_state, __ATOMIC_ACQUIRE) == 1) {
+    /* spin until the initializing thread publishes state=2 or resets to 0 */
+  }
+  if (__atomic_load_n(&g_pow5_anchor_state, __ATOMIC_ACQUIRE) == 2) {
+    return 1;
+  }
+  return ryu_init_pow5_anchor_cache();
+}
+
+static int ryu_bigint_from_pow5_stride(unsigned p, ryu_bigint* out) {
+  unsigned idx;
+  unsigned rem;
+  if (p > RYU_POW5_MAX_EXP) {
+    return 0;
+  }
+  if (!ryu_init_pow5_anchor_cache()) {
+    return 0;
+  }
+  idx = p / RYU_POW5_STRIDE;
+  rem = p % RYU_POW5_STRIDE;
+  ryu_bigint_copy(out, &g_pow5_anchor[idx]);
+  if (rem != 0u && !ryu_bigint_mul_pow5(out, rem)) {
+    return 0;
+  }
+  return 1;
+}
+#endif
+
 int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
   uint32_t rem = 0u;
   if (!ryu_bigint_div_small(a, div, &rem)) {
@@ -629,9 +745,18 @@ int ryu_exact_decimal_from_bits(uint64_t abs_bits, ryu_decimal_exact* out) {
     out->scale = 0u;
   } else {
     unsigned d = (unsigned)(-fp.exp2);
+#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+    if (!ryu_bigint_from_pow5_stride(d, &out->digits)) {
+      return 0;
+    }
+    if (!ryu_bigint_mul_u64(&out->digits, fp.mantissa)) {
+      return 0;
+    }
+#else
     if (!ryu_bigint_mul_pow5(&out->digits, d)) {
       return 0;
     }
+#endif
     out->scale = d;
   }
   return 1;

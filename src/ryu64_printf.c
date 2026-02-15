@@ -357,16 +357,20 @@ static ryu_status ryu_printf_g(
     if (f_precision < 0) {
       f_precision = 0;
     }
-    st = ryu_printf_f(
-        out,
-        out_cap,
-        exact,
-        negative,
-        f_precision,
-        alternate_form,
-        always_sign,
-        space_sign,
-        out_len);
+    if (!ryu_emit_fixed_from_scaled(
+            out,
+            out_cap,
+            negative,
+            &rounded_sig,
+            (unsigned)f_precision,
+            alternate_form,
+            always_sign,
+            space_sign,
+            out_len)) {
+      st = RYU_BUFFER_TOO_SMALL;
+    } else {
+      st = RYU_OK;
+    }
   }
   if (st != RYU_OK) {
     return st;
