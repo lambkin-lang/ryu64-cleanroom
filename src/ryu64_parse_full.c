@@ -27,6 +27,10 @@
 #if defined(RYU64_ENABLE_PARSE_BIGINT)
 #include "ryu64_internal.h"
 
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+void ryu_bigint_profile_note_len(size_t len);
+#endif
+
 typedef struct {
   int negative;
   int special; /* 0=none, 1=inf, 2=nan */
@@ -586,6 +590,9 @@ static int ryu_bigint_mul10_add_digit(ryu_bigint* a, unsigned digit) {
     carry /= (uint64_t)RYU_BIGINT_BASE;
   }
 
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+  ryu_bigint_profile_note_len(a->len);
+#endif
   return 1;
 }
 

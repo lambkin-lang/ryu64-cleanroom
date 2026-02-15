@@ -42,6 +42,14 @@
 #define MANT_MASK UINT64_C(0x000fffffffffffff)
 #define QUIET_NAN_BIT UINT64_C(0x0008000000000000)
 
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+#define RYU_BIGINT_PROFILE_SCOPE_FORMAT 0u
+#define RYU_BIGINT_PROFILE_SCOPE_PARSE 1u
+void ryu_bigint_profile_begin(unsigned scope);
+void ryu_bigint_profile_end(unsigned scope);
+size_t ryu_bigint_profile_last_peak(unsigned scope);
+#endif
+
 typedef struct {
   uint64_t* data;
   size_t len;
@@ -65,6 +73,7 @@ typedef struct {
   uint64_t seed;
   size_t warmup_count;
   size_t sample_limit;
+  int bigint_stats;
 } bench_options;
 
 typedef struct {
@@ -89,6 +98,14 @@ typedef struct {
   fail_sample* bit_samples;
   size_t numeric_sample_count;
   size_t bit_sample_count;
+  size_t bigint_format_calls;
+  uint64_t bigint_format_peak_sum_words;
+  size_t bigint_format_peak_max_words;
+  uint64_t bigint_format_peak_max_bits;
+  size_t bigint_parse_calls;
+  uint64_t bigint_parse_peak_sum_words;
+  size_t bigint_parse_peak_max_words;
+  uint64_t bigint_parse_peak_max_bits;
 } bench_result;
 
 typedef int (*format_fn)(char* out, size_t out_cap, double x, size_t* out_len);
@@ -98,6 +115,8 @@ typedef struct {
   format_fn fn;
   int timed_roundtrip;
   int (*parse)(const char* text, double* out_value);
+  int uses_ryu_format;
+  int uses_ryu_parse;
 } candidate;
 
 static uint64_t bits_from_double(double x) {
@@ -770,7 +789,25 @@ static int run_candidate(
     uint64_t in_bits = corpus_values->data[i];
     double x = double_from_bits(in_bits);
     size_t out_len = 0u;
-    int format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
+    int format_ok = 0;
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+    if (opt->bigint_stats && cand->uses_ryu_format) {
+      size_t peak_words;
+      ryu_bigint_profile_begin(RYU_BIGINT_PROFILE_SCOPE_FORMAT);
+      format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
+      ryu_bigint_profile_end(RYU_BIGINT_PROFILE_SCOPE_FORMAT);
+      peak_words = ryu_bigint_profile_last_peak(RYU_BIGINT_PROFILE_SCOPE_FORMAT);
+      out->bigint_format_calls += 1u;
+      out->bigint_format_peak_sum_words += (uint64_t)peak_words;
+      if (peak_words > out->bigint_format_peak_max_words) {
+        out->bigint_format_peak_max_words = peak_words;
+        out->bigint_format_peak_max_bits = in_bits;
+      }
+    } else
+#endif
+    {
+      format_ok = cand->fn(buf, sizeof(buf), x, &out_len);
+    }
     if (!format_ok) {
       if (cand->timed_roundtrip) {
         record_format_failure(out, opt, in_bits);
@@ -785,7 +822,26 @@ static int run_candidate(
 
     if (cand->timed_roundtrip) {
       double parsed = 0.0;
-      if (cand->parse == NULL || !cand->parse(buf, &parsed)) {
+      int parse_ok = 0;
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+      if (opt->bigint_stats && cand->uses_ryu_parse) {
+        size_t peak_words;
+        ryu_bigint_profile_begin(RYU_BIGINT_PROFILE_SCOPE_PARSE);
+        parse_ok = (cand->parse != NULL && cand->parse(buf, &parsed));
+        ryu_bigint_profile_end(RYU_BIGINT_PROFILE_SCOPE_PARSE);
+        peak_words = ryu_bigint_profile_last_peak(RYU_BIGINT_PROFILE_SCOPE_PARSE);
+        out->bigint_parse_calls += 1u;
+        out->bigint_parse_peak_sum_words += (uint64_t)peak_words;
+        if (peak_words > out->bigint_parse_peak_max_words) {
+          out->bigint_parse_peak_max_words = peak_words;
+          out->bigint_parse_peak_max_bits = in_bits;
+        }
+      } else
+#endif
+      {
+        parse_ok = (cand->parse != NULL && cand->parse(buf, &parsed));
+      }
+      if (!parse_ok) {
         record_parse_failure(out, opt, in_bits, buf);
       } else {
         record_parse_compare(out, opt, in_bits, x, parsed, buf);
@@ -845,7 +901,7 @@ static int parse_u64_arg(const char* s, uint64_t* out) {
 }
 
 static void usage(const char* argv0) {
-  printf("usage: %s [--random N] [--seed N] [--warmup N] [--samples N]\n", argv0);
+  printf("usage: %s [--random N] [--seed N] [--warmup N] [--samples N] [--bigint-stats]\n", argv0);
 }
 
 static int parse_args(int argc, char** argv, bench_options* opt) {
@@ -854,6 +910,7 @@ static int parse_args(int argc, char** argv, bench_options* opt) {
   opt->seed = UINT64_C(0x9e3779b97f4a7c15);
   opt->warmup_count = 1000u;
   opt->sample_limit = 8u;
+  opt->bigint_stats = 0;
 
   for (i = 1; i < argc; ++i) {
     uint64_t v = 0u;
@@ -883,6 +940,8 @@ static int parse_args(int argc, char** argv, bench_options* opt) {
       }
       opt->sample_limit = (size_t)v;
       i += 1;
+    } else if (strcmp(argv[i], "--bigint-stats") == 0) {
+      opt->bigint_stats = 1;
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
       usage(argv[0]);
       exit(0);
@@ -899,6 +958,7 @@ static int parse_args(int argc, char** argv, bench_options* opt) {
 
 static void print_result(const bench_result* r) {
   size_t i;
+  const double bytes_per_word = (double)sizeof(uint32_t);
   printf(
       "RESULT\t%s\t%llu\t%llu\t%.3f\t%.6f\t%llu\t%llu\t%llu\t%llu\t%llu\n",
       r->id,
@@ -947,6 +1007,32 @@ static void print_result(const bench_result* r) {
           s->text);
     }
   }
+
+  if (r->bigint_format_calls != 0u) {
+    double avg_words = (double)r->bigint_format_peak_sum_words / (double)r->bigint_format_calls;
+    printf(
+        "BIGINT\t%s\tformat\t%llu\t%.6f\t%llu\t%.6f\t%llu\t0x%016llx\n",
+        r->id,
+        (unsigned long long)r->bigint_format_calls,
+        avg_words,
+        (unsigned long long)r->bigint_format_peak_max_words,
+        avg_words * bytes_per_word,
+        (unsigned long long)(r->bigint_format_peak_max_words * sizeof(uint32_t)),
+        (unsigned long long)r->bigint_format_peak_max_bits);
+  }
+
+  if (r->bigint_parse_calls != 0u) {
+    double avg_words = (double)r->bigint_parse_peak_sum_words / (double)r->bigint_parse_calls;
+    printf(
+        "BIGINT\t%s\tparse\t%llu\t%.6f\t%llu\t%.6f\t%llu\t0x%016llx\n",
+        r->id,
+        (unsigned long long)r->bigint_parse_calls,
+        avg_words,
+        (unsigned long long)r->bigint_parse_peak_max_words,
+        avg_words * bytes_per_word,
+        (unsigned long long)(r->bigint_parse_peak_max_words * sizeof(uint32_t)),
+        (unsigned long long)r->bigint_parse_peak_max_bits);
+  }
 }
 
 int main(int argc, char** argv) {
@@ -961,6 +1047,12 @@ int main(int argc, char** argv) {
     usage(argv[0]);
     return 2;
   }
+#if !defined(RYU_ENABLE_BIGINT_PROFILE)
+  if (opt.bigint_stats) {
+    fprintf(stderr, "--bigint-stats requires build flag -DRYU_ENABLE_BIGINT_PROFILE=1\n");
+    return 2;
+  }
+#endif
 
   if (!build_corpus(&c, &opt)) {
     fprintf(stderr, "failed to build deterministic corpus\n");
@@ -989,18 +1081,26 @@ int main(int argc, char** argv) {
   candidates[0].fn = format_ryu64;
   candidates[0].timed_roundtrip = 0;
   candidates[0].parse = NULL;
+  candidates[0].uses_ryu_format = 1;
+  candidates[0].uses_ryu_parse = 0;
   candidates[1].id = "snprintf";
   candidates[1].fn = format_snprintf17g;
   candidates[1].timed_roundtrip = 0;
   candidates[1].parse = NULL;
+  candidates[1].uses_ryu_format = 0;
+  candidates[1].uses_ryu_parse = 0;
   candidates[2].id = "ryu64_rt";
   candidates[2].fn = format_ryu64;
   candidates[2].timed_roundtrip = 1;
   candidates[2].parse = parse_decimal_text_ryu_full;
+  candidates[2].uses_ryu_format = 1;
+  candidates[2].uses_ryu_parse = 1;
   candidates[3].id = "snprintf_rt";
   candidates[3].fn = format_snprintf17g;
   candidates[3].timed_roundtrip = 1;
   candidates[3].parse = parse_decimal_text;
+  candidates[3].uses_ryu_format = 0;
+  candidates[3].uses_ryu_parse = 0;
 
   for (i = 0u; i < 4u; ++i) {
     if (!run_candidate(&candidates[i], &c.values, &opt, &results[i])) {

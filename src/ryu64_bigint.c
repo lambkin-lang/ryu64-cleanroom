@@ -55,15 +55,73 @@ static const uint32_t kPow5Small[14] = {
     1220703125u,
 };
 
+#if defined(RYU_ENABLE_BIGINT_PROFILE)
+#define RYU_BIGINT_PROFILE_SCOPE_FORMAT 0u
+#define RYU_BIGINT_PROFILE_SCOPE_PARSE 1u
+#define RYU_BIGINT_PROFILE_SCOPE_COUNT 2u
+
+static unsigned g_bigint_profile_active_scope = RYU_BIGINT_PROFILE_SCOPE_COUNT;
+static unsigned g_bigint_profile_active_depth = 0u;
+static size_t g_bigint_profile_current_peak = 0u;
+static size_t g_bigint_profile_last_peak[RYU_BIGINT_PROFILE_SCOPE_COUNT];
+
+void ryu_bigint_profile_begin(unsigned scope) {
+  if (scope >= RYU_BIGINT_PROFILE_SCOPE_COUNT) {
+    return;
+  }
+  if (g_bigint_profile_active_depth == 0u) {
+    g_bigint_profile_active_scope = scope;
+    g_bigint_profile_current_peak = 0u;
+  }
+  if (g_bigint_profile_active_scope == scope) {
+    g_bigint_profile_active_depth += 1u;
+  }
+}
+
+void ryu_bigint_profile_end(unsigned scope) {
+  if (scope >= RYU_BIGINT_PROFILE_SCOPE_COUNT) {
+    return;
+  }
+  if (g_bigint_profile_active_scope != scope || g_bigint_profile_active_depth == 0u) {
+    return;
+  }
+  g_bigint_profile_active_depth -= 1u;
+  if (g_bigint_profile_active_depth == 0u) {
+    g_bigint_profile_last_peak[scope] = g_bigint_profile_current_peak;
+    g_bigint_profile_active_scope = RYU_BIGINT_PROFILE_SCOPE_COUNT;
+    g_bigint_profile_current_peak = 0u;
+  }
+}
+
+size_t ryu_bigint_profile_last_peak(unsigned scope) {
+  if (scope >= RYU_BIGINT_PROFILE_SCOPE_COUNT) {
+    return 0u;
+  }
+  return g_bigint_profile_last_peak[scope];
+}
+
+void ryu_bigint_profile_note_len(size_t len) {
+  if (g_bigint_profile_active_depth != 0u && len > g_bigint_profile_current_peak) {
+    g_bigint_profile_current_peak = len;
+  }
+}
+
+#define RYU_BIGINT_PROFILE_NOTE_LEN(v) ryu_bigint_profile_note_len((v))
+#else
+#define RYU_BIGINT_PROFILE_NOTE_LEN(v) ((void)(v))
+#endif
+
 static void ryu_bigint_normalize(ryu_bigint* v) {
   while (v->len > 1u && v->limb[v->len - 1u] == 0u) {
     v->len -= 1u;
   }
+  RYU_BIGINT_PROFILE_NOTE_LEN(v->len);
 }
 
 void ryu_bigint_zero(ryu_bigint* v) {
   v->len = 1u;
   v->limb[0] = 0u;
+  RYU_BIGINT_PROFILE_NOTE_LEN(v->len);
 }
 
 void ryu_bigint_from_u64(ryu_bigint* v, uint64_t x) {
@@ -81,6 +139,7 @@ void ryu_bigint_from_u64(ryu_bigint* v, uint64_t x) {
     v->len += 1u;
     x /= (uint64_t)RYU_BIGINT_BASE;
   }
+  RYU_BIGINT_PROFILE_NOTE_LEN(v->len);
 }
 
 int ryu_bigint_is_zero(const ryu_bigint* v) {
@@ -90,6 +149,7 @@ int ryu_bigint_is_zero(const ryu_bigint* v) {
 void ryu_bigint_copy(ryu_bigint* dst, const ryu_bigint* src) {
   dst->len = src->len;
   memcpy(dst->limb, src->limb, src->len * sizeof(uint32_t));
+  RYU_BIGINT_PROFILE_NOTE_LEN(dst->len);
 }
 
 int ryu_bigint_cmp(const ryu_bigint* a, const ryu_bigint* b) {
@@ -166,6 +226,7 @@ int ryu_bigint_add_small(ryu_bigint* a, uint32_t b) {
     carry = sum / (uint64_t)RYU_BIGINT_BASE;
     i += 1u;
   }
+  RYU_BIGINT_PROFILE_NOTE_LEN(a->len);
   return 1;
 }
 
@@ -224,6 +285,7 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
     return 1;
   }
   if (m == 1u || ryu_bigint_is_zero(a)) {
+    RYU_BIGINT_PROFILE_NOTE_LEN(a->len);
     return 1;
   }
   for (i = 0u; i < a->len; ++i) {
@@ -239,6 +301,7 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
     a->len += 1u;
     carry /= (uint64_t)RYU_BIGINT_BASE;
   }
+  RYU_BIGINT_PROFILE_NOTE_LEN(a->len);
   return 1;
 }
 
@@ -263,6 +326,7 @@ int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
     return 0;
   }
   if (q == 0u) {
+    RYU_BIGINT_PROFILE_NOTE_LEN(a->len);
     return 1;
   }
   if (a->len + (size_t)q > RYU_BIGINT_MAX_LIMBS) {
@@ -271,6 +335,7 @@ int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
   memmove(a->limb + q, a->limb, a->len * sizeof(uint32_t));
   memset(a->limb, 0, (size_t)q * sizeof(uint32_t));
   a->len += (size_t)q;
+  RYU_BIGINT_PROFILE_NOTE_LEN(a->len);
   return 1;
 }
 
@@ -347,6 +412,7 @@ static int ryu_bigint_mul_u64(ryu_bigint* a, uint64_t m) {
     memmove(hi_term.limb + 1u, hi_term.limb, hi_term.len * sizeof(uint32_t));
     hi_term.limb[0] = 0u;
     hi_term.len += 1u;
+    RYU_BIGINT_PROFILE_NOTE_LEN(hi_term.len);
     if (!ryu_bigint_add(a, &hi_term)) {
       return 0;
     }
@@ -578,6 +644,7 @@ int ryu_bigint_div_pow10_floor(
   }
 
   q->len = n->len - (size_t)q_digits;
+  RYU_BIGINT_PROFILE_NOTE_LEN(q->len);
   for (i = 0u; i < q->len; ++i) {
     q->limb[i] = n->limb[i + (size_t)q_digits];
   }
@@ -1261,6 +1328,7 @@ static int ryu_round_integer_div_pow10(
   }
 
   rounded->len = value->len - (size_t)q_digits;
+  RYU_BIGINT_PROFILE_NOTE_LEN(rounded->len);
   for (i = 0u; i < rounded->len; ++i) {
     rounded->limb[i] = value->limb[i + (size_t)q_digits];
   }
