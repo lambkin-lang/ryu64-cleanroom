@@ -310,7 +310,8 @@ SHOOTOUT_NATIVE_CFLAGS = -std=c11 -O2 -DNDEBUG -flto \
 	-ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables
 SHOOTOUT_NATIVE_ENABLE_POW5_CACHE ?= 1
 SHOOTOUT_NATIVE_POW5_STRIDE ?= 16
-SHOOTOUT_NATIVE_FLAGS_NOTE = native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables -DRYU_TIER_FULL
+SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE = native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables
+SHOOTOUT_NATIVE_FLAGS_NOTE = $(SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE) -DRYU_TIER_FULL
 SHOOTOUT_WASM_ENABLE_POW5_CACHE ?= 1
 SHOOTOUT_WASM_POW5_STRIDE ?= 16
 SHOOTOUT_WASM_POW5_FLAGS =
@@ -532,13 +533,13 @@ shootout-report-html: shootout-report-size shootout-report-perf
 		[ -z "$$ns_per_conv" ] && continue; \
 			case "$$id" in \
 				ryu64_native) flags='native clean-room formatter ($(SHOOTOUT_NATIVE_FLAGS_NOTE))' ;; \
-				snprintf_native) flags='native libc snprintf baseline' ;; \
+				snprintf_native) flags='native libc snprintf baseline ($(SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE))' ;; \
 				ryu64_wasm_mvp) flags='wasm mvp clean-room formatter; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 				snprintf_wasm_mvp) flags='wasm mvp libc snprintf baseline; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
 				ryu64_wasm_gcplus) flags='wasm gcplus clean-room formatter; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 				snprintf_wasm_gcplus) flags='wasm gcplus libc snprintf baseline; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
 				ryu64_rt_native) flags='native clean-room formatter + ryu64_from_decimal_full parser' ;; \
-				snprintf_rt_native) flags='native libc snprintf + strtod parser' ;; \
+				snprintf_rt_native) flags='native libc snprintf + strtod parser ($(SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE))' ;; \
 				ryu64_rt_wasm_mvp) flags='wasm mvp clean-room formatter + ryu64_from_decimal_full parser; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 				snprintf_rt_wasm_mvp) flags='wasm mvp libc snprintf + strtod via wasi-libc; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
 				ryu64_rt_wasm_gcplus) flags='wasm gcplus clean-room formatter + ryu64_from_decimal_full parser; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
@@ -571,13 +572,13 @@ shootout-report-html: shootout-report-size shootout-report-perf
 		[ -z "$$ns_per_conv" ] && continue; \
 		case "$$id" in \
 			ryu64_native) flags='native clean-room formatter ($(SHOOTOUT_NATIVE_FLAGS_NOTE))' ;; \
-			snprintf_native) flags='native libc snprintf baseline' ;; \
+			snprintf_native) flags='native libc snprintf baseline ($(SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE))' ;; \
 			ryu64_wasm_mvp) flags='wasm mvp clean-room formatter; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 			snprintf_wasm_mvp) flags='wasm mvp libc snprintf baseline; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
 			ryu64_wasm_gcplus) flags='wasm gcplus clean-room formatter; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 			snprintf_wasm_gcplus) flags='wasm gcplus libc snprintf baseline; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
 			ryu64_rt_native) flags='native clean-room formatter + ryu64_from_decimal_full parser' ;; \
-			snprintf_rt_native) flags='native libc snprintf + strtod parser' ;; \
+			snprintf_rt_native) flags='native libc snprintf + strtod parser ($(SHOOTOUT_NATIVE_COMMON_FLAGS_NOTE))' ;; \
 			ryu64_rt_wasm_mvp) flags='wasm mvp clean-room formatter + ryu64_from_decimal_full parser; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
 			snprintf_rt_wasm_mvp) flags='wasm mvp libc snprintf + strtod via wasi-libc; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
 			ryu64_rt_wasm_gcplus) flags='wasm gcplus clean-room formatter + ryu64_from_decimal_full parser; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
