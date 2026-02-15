@@ -38,7 +38,7 @@ static const uint32_t kPow10Small[9] = {
     100000000u,
 };
 
-static const uint32_t kPow5Small[13] = {
+static const uint32_t kPow5Small[14] = {
     1u,
     5u,
     25u,
@@ -52,6 +52,7 @@ static const uint32_t kPow5Small[13] = {
     9765625u,
     48828125u,
     244140625u,
+    1220703125u,
 };
 
 static void ryu_bigint_normalize(ryu_bigint* v) {
@@ -243,7 +244,7 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
 
 int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p) {
   while (p != 0u) {
-    unsigned chunk = (p > 12u) ? 12u : p;
+    unsigned chunk = (p > 13u) ? 13u : p;
     if (!ryu_bigint_mul_small(a, kPow5Small[chunk])) {
       return 0;
     }
@@ -255,7 +256,6 @@ int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p) {
 int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
   unsigned q = p / 9u;
   unsigned r = p % 9u;
-  size_t i;
   if (ryu_bigint_is_zero(a)) {
     return 1;
   }
@@ -268,15 +268,8 @@ int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
   if (a->len + (size_t)q > RYU_BIGINT_MAX_LIMBS) {
     return 0;
   }
-  i = a->len;
-  while (i > 0u) {
-    size_t idx = i - 1u;
-    a->limb[idx + q] = a->limb[idx];
-    i -= 1u;
-  }
-  for (i = 0u; i < (size_t)q; ++i) {
-    a->limb[i] = 0u;
-  }
+  memmove(a->limb + q, a->limb, a->len * sizeof(uint32_t));
+  memset(a->limb, 0, (size_t)q * sizeof(uint32_t));
   a->len += (size_t)q;
   return 1;
 }
@@ -296,7 +289,7 @@ int ryu_bigint_shl_bits(ryu_bigint* a, unsigned bits) {
   return 1;
 }
 
-int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
+static int ryu_bigint_div_small(ryu_bigint* a, uint32_t div, uint32_t* rem_out) {
   uint64_t carry = 0u;
   size_t idx;
 
@@ -308,11 +301,19 @@ int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
     a->limb[idx - 1u] = (uint32_t)(cur / (uint64_t)div);
     carry = cur % (uint64_t)div;
   }
-  if (a->len == 0u) {
+  ryu_bigint_normalize(a);
+  if (rem_out != NULL) {
+    *rem_out = (uint32_t)carry;
+  }
+  return 1;
+}
+
+int ryu_bigint_div_small_exact(ryu_bigint* a, uint32_t div) {
+  uint32_t rem = 0u;
+  if (!ryu_bigint_div_small(a, div, &rem)) {
     return 0;
   }
-  ryu_bigint_normalize(a);
-  return carry == 0u;
+  return rem == 0u;
 }
 
 int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out) {
@@ -337,17 +338,35 @@ int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out) {
 
 unsigned ryu_bigint_decimal_len(const ryu_bigint* a) {
   uint32_t top;
-  unsigned digits = 1u;
   if (ryu_bigint_is_zero(a)) {
     return 1u;
   }
   top = a->limb[a->len - 1u];
-  while (top >= 10u) {
-    top /= 10u;
-    digits += 1u;
+  if (top >= 100000000u) {
+    return 9u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
   }
-  digits += (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
-  return digits;
+  if (top >= 10000000u) {
+    return 8u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 1000000u) {
+    return 7u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 100000u) {
+    return 6u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 10000u) {
+    return 5u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 1000u) {
+    return 4u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 100u) {
+    return 3u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  if (top >= 10u) {
+    return 2u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
+  }
+  return 1u + (unsigned)((a->len - 1u) * (size_t)RYU_BIGINT_BASE_DIGITS);
 }
 
 static size_t ryu_write_u32_no_pad(char* out, size_t cap, uint32_t v) {
@@ -799,6 +818,30 @@ static size_t ryu_i32_to_dec(int x, char* out) {
   return ryu_u64_to_dec((uint64_t)u, out);
 }
 
+static int ryu_bigint_to_decimal_fast(
+    const ryu_bigint* v,
+    char* out,
+    size_t out_cap,
+    size_t* out_len) {
+  uint64_t small = 0u;
+  if (ryu_bigint_to_u64(v, &small)) {
+    size_t n;
+    if (out_cap == 0u) {
+      return 0;
+    }
+    n = ryu_u64_to_dec(small, out);
+    if (n + 1u > out_cap) {
+      return 0;
+    }
+    out[n] = '\0';
+    if (out_len != NULL) {
+      *out_len = n;
+    }
+    return 1;
+  }
+  return ryu_bigint_to_decimal(v, out, out_cap, out_len);
+}
+
 int ryu_write_sign(
     char* out,
     size_t out_cap,
@@ -1048,76 +1091,85 @@ int ryu_format_scientific_fixed_sig(
   return 1;
 }
 
-static int ryu_bigint_from_decimal(const char* s, size_t len, ryu_bigint* out) {
-  size_t i;
-  ryu_bigint_zero(out);
-  for (i = 0u; i < len; ++i) {
-    unsigned d;
-    if (s[i] < '0' || s[i] > '9') {
-      return 0;
-    }
-    d = (unsigned)(s[i] - '0');
-    if (!ryu_bigint_mul_small(out, 10u)) {
-      return 0;
-    }
-    if (!ryu_bigint_add_small(out, (uint32_t)d)) {
-      return 0;
-    }
-  }
-  return 1;
-}
-
 static int ryu_round_integer_div_pow10(
     const ryu_bigint* value,
     unsigned drop,
     ryu_bigint* rounded) {
-  char dec[RYU_LOCAL_BUF_CAP];
-  size_t len = 0u;
-  int cut;
-  size_t keep_len;
-  char round_digit;
+  unsigned q_digits = drop / 9u;
+  unsigned r = drop % 9u;
+  uint32_t round_digit = 0u;
   int tail_nonzero = 0;
-  char last_kept;
+  size_t i;
 
   if (drop == 0u) {
     ryu_bigint_copy(rounded, value);
     return 1;
   }
-  if (!ryu_bigint_to_decimal(value, dec, sizeof(dec), &len)) {
-    return 0;
-  }
 
-  cut = (int)len - (int)drop;
-  keep_len = (cut > 0) ? (size_t)cut : 0u;
-
-  if (keep_len == 0u) {
+  if (q_digits >= value->len) {
     ryu_bigint_zero(rounded);
-    last_kept = '0';
-  } else {
-    if (!ryu_bigint_from_decimal(dec, keep_len, rounded)) {
-      return 0;
+    if (q_digits > value->len || r != 0u) {
+      return 1;
     }
-    last_kept = dec[keep_len - 1u];
-  }
-
-  if (cut < 0) {
-    round_digit = '0';
-    tail_nonzero = !ryu_bigint_is_zero(value);
-  } else if ((size_t)cut >= len) {
-    round_digit = '0';
-  } else {
-    size_t i;
-    round_digit = dec[(size_t)cut];
-    for (i = (size_t)cut + 1u; i < len; ++i) {
-      if (dec[i] != '0') {
+    {
+      uint32_t top = value->limb[value->len - 1u];
+      if (top < 100000000u) {
+        return 1;
+      }
+      round_digit = top / 100000000u;
+      if ((top % 100000000u) != 0u) {
         tail_nonzero = 1;
-        break;
+      }
+      for (i = 0u; i + 1u < value->len; ++i) {
+        if (value->limb[i] != 0u) {
+          tail_nonzero = 1;
+          break;
+        }
       }
     }
+    if (round_digit > 5u || (round_digit == 5u && tail_nonzero)) {
+      if (!ryu_bigint_add_small(rounded, 1u)) {
+        return 0;
+      }
+    }
+    return 1;
   }
 
-  if (round_digit > '5' ||
-      (round_digit == '5' && (tail_nonzero || (((last_kept - '0') & 1) != 0)))) {
+  rounded->len = value->len - (size_t)q_digits;
+  for (i = 0u; i < rounded->len; ++i) {
+    rounded->limb[i] = value->limb[i + (size_t)q_digits];
+  }
+
+  for (i = 0u; i < (size_t)q_digits; ++i) {
+    if (value->limb[i] != 0u) {
+      tail_nonzero = 1;
+      break;
+    }
+  }
+
+  if (r == 0u) {
+    uint32_t dropped_top = value->limb[(size_t)q_digits - 1u];
+    round_digit = dropped_top / 100000000u;
+    if ((dropped_top % 100000000u) != 0u) {
+      tail_nonzero = 1;
+    }
+  } else {
+    uint32_t div = kPow10Small[r];
+    uint32_t rem = 0u;
+    uint32_t low_mask = kPow10Small[r - 1u];
+    if (!ryu_bigint_div_small(rounded, div, &rem)) {
+      return 0;
+    }
+    round_digit = rem / low_mask;
+    if ((rem % low_mask) != 0u) {
+      tail_nonzero = 1;
+    }
+  }
+
+  ryu_bigint_normalize(rounded);
+
+  if (round_digit > 5u ||
+      (round_digit == 5u && (tail_nonzero || ((rounded->limb[0] & 1u) != 0u)))) {
     if (!ryu_bigint_add_small(rounded, 1u)) {
       return 0;
     }
@@ -1195,7 +1247,7 @@ int ryu_emit_fixed_from_scaled(
   size_t len = 0u;
   size_t pos = 0u;
 
-  if (!ryu_bigint_to_decimal(scaled, dec, sizeof(dec), &len)) {
+  if (!ryu_bigint_to_decimal_fast(scaled, dec, sizeof(dec), &len)) {
     return 0;
   }
 

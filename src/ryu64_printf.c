@@ -62,6 +62,50 @@ static size_t ryu_u32_to_dec(uint32_t v, char* out) {
   return n;
 }
 
+static size_t ryu_u64_to_dec(uint64_t v, char* out) {
+  char rev[32];
+  size_t n = 0u;
+  if (v == 0u) {
+    out[0] = '0';
+    return 1u;
+  }
+  while (v != 0u) {
+    rev[n++] = (char)('0' + (v % UINT64_C(10)));
+    v /= UINT64_C(10);
+  }
+  {
+    size_t i;
+    for (i = 0u; i < n; ++i) {
+      out[i] = rev[n - 1u - i];
+    }
+  }
+  return n;
+}
+
+static int ryu_bigint_to_decimal_fast(
+    const ryu_bigint* value,
+    char* out,
+    size_t out_cap,
+    size_t* out_len) {
+  uint64_t small = 0u;
+  if (ryu_bigint_to_u64(value, &small)) {
+    size_t n;
+    if (out_cap == 0u) {
+      return 0;
+    }
+    n = ryu_u64_to_dec(small, out);
+    if (n + 1u > out_cap) {
+      return 0;
+    }
+    out[n] = '\0';
+    if (out_len != NULL) {
+      *out_len = n;
+    }
+    return 1;
+  }
+  return ryu_bigint_to_decimal(value, out, out_cap, out_len);
+}
+
 static int ryu_append_exponent(
     char* out,
     size_t out_cap,
@@ -113,7 +157,7 @@ static int ryu_emit_scientific_from_rounded(
   unsigned frac = precision;
   size_t copy_tail;
 
-  if (!ryu_bigint_to_decimal(rounded, dec, sizeof(dec), &len)) {
+  if (!ryu_bigint_to_decimal_fast(rounded, dec, sizeof(dec), &len)) {
     return 0;
   }
   if (len == 0u) {
@@ -282,6 +326,7 @@ static ryu_status ryu_printf_g(
   }
 
   if (ryu_bigint_is_zero(&exact->digits)) {
+    ryu_bigint_from_u64(&rounded_sig, 0u);
     exp10 = 0;
   } else {
     if (!ryu_round_exact_to_significant(exact, (unsigned)precision, &rounded_sig, &exp10)) {
@@ -291,17 +336,22 @@ static ryu_status ryu_printf_g(
 
   use_scientific = (exp10 < -4 || exp10 >= precision);
   if (use_scientific) {
-    st = ryu_printf_e(
-        out,
-        out_cap,
-        exact,
-        negative,
-        precision - 1,
-        uppercase,
-        alternate_form,
-        always_sign,
-        space_sign,
-        out_len);
+    if (!ryu_emit_scientific_from_rounded(
+            out,
+            out_cap,
+            negative,
+            &rounded_sig,
+            (unsigned)(precision - 1),
+            exp10,
+            uppercase,
+            alternate_form,
+            always_sign,
+            space_sign,
+            out_len)) {
+      st = RYU_BUFFER_TOO_SMALL;
+    } else {
+      st = RYU_OK;
+    }
   } else {
     f_precision = precision - (exp10 + 1);
     if (f_precision < 0) {

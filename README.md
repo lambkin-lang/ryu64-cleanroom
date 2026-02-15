@@ -97,6 +97,10 @@ make test
 make oracle-test
 make benchmark-speed
 make benchmark-size
+make shootout
+make shootout-bench
+make shootout-report
+make wasm-compare
 make wasm-tiny
 make nolibc-check-speed
 make nolibc-check-size
@@ -130,6 +134,36 @@ Oracle/benchmark program:
   - dedicated `printf-nan-policy` checks enforce this project's explicit NaN policy
 - It includes deterministic stress datasets and random fuzzing, and reports timing.
   - deterministic stress includes dense low/high subnormal windows and a broad deterministic subnormal scatter set
+- Shootout reporting:
+  - `make shootout-report` emits automatic all-pairs size and performance breakdowns for:
+    - `ryu64 native`
+    - `ryu64 wasm mvp`
+    - `ryu64 wasm gcplus`
+    - `snprintf native`
+    - `snprintf wasm mvp`
+    - `snprintf wasm gcplus`
+  - performance methodology (`shootout/deep_bench.c`):
+    - single in-process harness with a narrow interface (`double` in, decimal text out) that runs every candidate in one executable
+    - deterministic corpus built once per run from:
+      - canonical IEEE-754 edge set (signed zeros, min/max finite, normal/subnormal boundaries, infinities, NaN patterns)
+      - neighbors around powers of two across binary64 exponent range
+      - neighbors around powers of ten across decimal exponent range
+      - decimal-literal-origin hard cases
+      - crafted raw bit-pattern buckets (exponent/mantissa patterns and walking mantissa bits)
+      - fixed-seed random raw bit patterns (with signaling NaNs canonicalized to quiet NaNs)
+    - short warm-up pass before timing, then one full pass per candidate over identical corpus order
+    - roundtrip validation in the same run with separate counters for numeric vs bit-exact failures
+  - it also generates one self-contained HTML page with all report sections:
+    - `build/reports/shootout_report.html`
+  - machine-readable report files are written to:
+    - `build/reports/shootout_size.tsv`
+    - `build/reports/shootout_perf.tsv`
+    - `build/reports/shootout_perf_failures.tsv`
+  - deep perf knobs (override on make command line):
+    - `SHOOTOUT_DEEP_RANDOM` (default `224624`)
+    - `SHOOTOUT_DEEP_SEED` (default `0x9e3779b97f4a7c15`)
+    - `SHOOTOUT_DEEP_WARMUP` (default `1000`)
+    - `SHOOTOUT_DEEP_SAMPLES` (default `8`)
 - Non-oracle compile checks are provided via `nolibc-check-speed` and `nolibc-check-size`.
 - Optional exhaustive subnormal parser sweep:
   - `RYU_EXHAUSTIVE_SUBNORMAL_LIMIT=<N> make test`
@@ -140,6 +174,15 @@ Oracle/benchmark program:
   - the shim is intentionally minimal/correctness-first (byte-wise loops), not tuned for peak throughput.
   - `memcmp` returns sign-only (-1/0/1), which is C-conforming (`<0`, `==0`, `>0` contract).
   - If your runtime already provides these symbols, you can use that instead.
+  - current dual wasm targets:
+    - `make wasm-mvp` (MVP-only validation target)
+    - `make wasm-gcplus` (feature-enabled target for current wasmtime support)
+  - performance caveat for GC+ tuning:
+    - enabling bulk-memory features alone is not enough to get `memory.copy` / `memory.fill`.
+    - with `-fno-builtin`, clang generally will not lower memory ops to bulk-memory instructions.
+    - to test bulk-memory speedups, enable builtins for GC+ builds while keeping MVP builds strict (`wasm-tools validate --features=mvp`).
+  - mvp libc benchmark note:
+    - the mvp shootout binaries that use wasi libc apply `wasm-opt --llvm-memory-copy-fill-lowering` plus bulk-memory disable flags before MVP validation.
 
 ## API summary
 
