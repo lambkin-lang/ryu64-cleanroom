@@ -311,6 +311,10 @@ SHOOTOUT_NATIVE_CFLAGS = -std=c11 -O2 -DNDEBUG -flto \
 SHOOTOUT_NATIVE_ENABLE_POW5_CACHE ?= 1
 SHOOTOUT_NATIVE_POW5_STRIDE ?= 16
 SHOOTOUT_NATIVE_FLAGS_NOTE = native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables -DRYU_TIER_FULL
+SHOOTOUT_WASM_ENABLE_POW5_CACHE ?= 1
+SHOOTOUT_WASM_POW5_STRIDE ?= 16
+SHOOTOUT_WASM_POW5_FLAGS =
+SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX =
 SHOOTOUT_REPORT_DIR ?= build/reports
 SHOOTOUT_SIZE_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_size.tsv
 SHOOTOUT_PERF_REPORT ?= $(SHOOTOUT_REPORT_DIR)/shootout_perf.tsv
@@ -324,20 +328,24 @@ SHOOTOUT_DEEP_SAMPLES ?= 8
 SHOOTOUT_DEEP_ARGS = --random $(SHOOTOUT_DEEP_RANDOM) --seed $(SHOOTOUT_DEEP_SEED) --warmup $(SHOOTOUT_DEEP_WARMUP) --samples $(SHOOTOUT_DEEP_SAMPLES)
 SHOOTOUT_WASI_MVP_CFLAGS = -std=c11 -Oz -DNDEBUG -ffreestanding -fno-builtin -nostdinc \
 	-ffunction-sections -fdata-sections -fno-stack-protector -fvisibility=hidden \
-	-fno-unwind-tables -fno-asynchronous-unwind-tables $(WASI_MVP_FEATURE_FLAGS)
+	-fno-unwind-tables -fno-asynchronous-unwind-tables $(WASI_MVP_FEATURE_FLAGS) $(SHOOTOUT_WASM_POW5_FLAGS)
 SHOOTOUT_WASI_GCPLUS_CFLAGS = -std=c11 -Oz -DNDEBUG -ffreestanding -fno-builtin -nostdinc \
 	-ffunction-sections -fdata-sections -fno-stack-protector -fvisibility=hidden \
-	-fno-unwind-tables -fno-asynchronous-unwind-tables $(WASI_GCPLUS_FEATURE_FLAGS)
+	-fno-unwind-tables -fno-asynchronous-unwind-tables $(WASI_GCPLUS_FEATURE_FLAGS) $(SHOOTOUT_WASM_POW5_FLAGS)
 SHOOTOUT_WASI_LIBC_CFLAGS = -std=c11 -Oz -DNDEBUG -flto \
 	-ffunction-sections -fdata-sections -fno-stack-protector -fvisibility=hidden \
 	-fno-unwind-tables -fno-asynchronous-unwind-tables
-SHOOTOUT_WASI_LIBC_MVP_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_MVP_FEATURE_FLAGS)
-SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_GCPLUS_FEATURE_FLAGS)
+SHOOTOUT_WASI_LIBC_MVP_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_MVP_FEATURE_FLAGS) $(SHOOTOUT_WASM_POW5_FLAGS)
+SHOOTOUT_WASI_LIBC_GCPLUS_CFLAGS = $(SHOOTOUT_WASI_LIBC_CFLAGS) $(WASI_GCPLUS_FEATURE_FLAGS) $(SHOOTOUT_WASM_POW5_FLAGS)
 SHOOTOUT_WASI_MVP_LDFLAGS = -nostdlib -Wl,--entry=_start -Wl,--export=_start -Wl,--gc-sections -Wl,--strip-all
 SHOOTOUT_WASI_GCPLUS_LDFLAGS = -nostdlib -Wl,--entry=_start -Wl,--export=_start -Wl,--gc-sections -Wl,--strip-all
 ifeq ($(SHOOTOUT_NATIVE_ENABLE_POW5_CACHE),1)
   SHOOTOUT_NATIVE_CFLAGS += -DRYU_ENABLE_POW5_STRIDE_CACHE=1 -DRYU_POW5_STRIDE=$(SHOOTOUT_NATIVE_POW5_STRIDE)
   SHOOTOUT_NATIVE_FLAGS_NOTE += + pow5-stride-cache
+endif
+ifeq ($(SHOOTOUT_WASM_ENABLE_POW5_CACHE),1)
+  SHOOTOUT_WASM_POW5_FLAGS = -DRYU_ENABLE_POW5_STRIDE_CACHE=1 -DRYU_POW5_STRIDE=$(SHOOTOUT_WASM_POW5_STRIDE)
+  SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX = + pow5-stride-cache
 endif
 ifeq ($(WASI_ENABLE_LTO),1)
   SHOOTOUT_WASI_GCPLUS_CFLAGS += -flto
@@ -499,13 +507,13 @@ shootout-report-html: shootout-report-size shootout-report-perf
 		[ -z "$$ns_per_conv" ] && continue; \
 			case "$$id" in \
 				ryu64_native) flags='$(SHOOTOUT_NATIVE_FLAGS_NOTE)' ;; \
-			snprintf_native) flags='native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables (libc snprintf baseline)' ;; \
-			ryu64_wasm_mvp) flags='wasm mvp: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
-			snprintf_wasm_mvp) flags='wasm mvp: -flto wasi-libc build; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
-			ryu64_wasm_gcplus) flags='wasm gcplus: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden +flto; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
-			snprintf_wasm_gcplus) flags='wasm gcplus: -flto wasi-libc build; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
-			*) flags='n/a' ;; \
-		esac; \
+				snprintf_native) flags='native: -flto -fno-unwind-tables -fno-asynchronous-unwind-tables (libc snprintf baseline)' ;; \
+				ryu64_wasm_mvp) flags='wasm mvp: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_wasm_mvp) flags='wasm mvp: -flto wasi-libc build; MVP feature disables; wasm-opt mvp lowering (+ optional strip/vacuum)' ;; \
+				ryu64_wasm_gcplus) flags='wasm gcplus: -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -fvisibility=hidden +flto; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum) $(SHOOTOUT_WASM_FLAGS_NOTE_SUFFIX)' ;; \
+				snprintf_wasm_gcplus) flags='wasm gcplus: -flto wasi-libc build; GC+ feature enables; wasm-opt -Oz (+ optional strip/vacuum)' ;; \
+				*) flags='n/a' ;; \
+			esac; \
 		ncls="warn"; [ "$$numeric_fail" = "0" ] && ncls="ok"; \
 		bcls="warn"; [ "$$bit_fail" = "0" ] && bcls="ok"; \
 		printf '<tr><td>%s</td><td class="num js-int" data-int="%s">%s</td><td class="num js-fixed1" data-float="%s">%s</td><td class="flags">%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num %s js-ratio" data-num="%s" data-den="%s">%s/%s</td><td class="num js-fixed3" data-float="%s">%s</td></tr>\n' \

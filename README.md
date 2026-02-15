@@ -173,7 +173,9 @@ Oracle/benchmark program:
   - native speed-profile knobs:
     - `SHOOTOUT_NATIVE_ENABLE_POW5_CACHE` (default `1`) enables a clean-room pow5 stride cache in native shootout/deep builds
     - `SHOOTOUT_NATIVE_POW5_STRIDE` (default `16`) controls anchor spacing for that cache
-    - these knobs only affect native shootout/deep targets; wasm targets stay unchanged unless explicitly configured
+  - wasm speed-profile knobs:
+    - `SHOOTOUT_WASM_ENABLE_POW5_CACHE` (default `1`) enables the same clean-room pow5 stride cache for wasm shootout/deep builds
+    - `SHOOTOUT_WASM_POW5_STRIDE` (default `16`) controls anchor spacing for that cache
 - Non-oracle compile checks are provided via `nolibc-check-speed` and `nolibc-check-size`.
 - Optional exhaustive subnormal parser sweep:
   - `RYU_EXHAUSTIVE_SUBNORMAL_LIMIT=<N> make test`
