@@ -151,8 +151,8 @@ Oracle/benchmark program:
       - decimal-literal-origin hard cases
       - crafted raw bit-pattern buckets (exponent/mantissa patterns and walking mantissa bits)
       - fixed-seed random raw bit patterns (with signaling NaNs canonicalized to quiet NaNs)
-    - short warm-up pass before timing, then one full pass per candidate over identical corpus order
-    - roundtrip validation in the same run with separate counters for numeric vs bit-exact failures
+    - short warm-up pass before timing, then one timed format-only pass per candidate over identical corpus order
+    - roundtrip validation runs as a separate untimed pass, with separate counters for numeric vs bit-exact failures
   - it also generates one self-contained HTML page with all report sections:
     - `build/reports/shootout_report.html`
   - machine-readable report files are written to:

@@ -531,6 +531,7 @@ shootout-report-html: shootout-report-size shootout-report-perf
 '</div>' \
 '<div class="note">Common flags (all programs): -std=c11 -DNDEBUG -ffunction-sections -fdata-sections.</div>' \
 '<div class="note">WASM variants include post-processing with /opt/homebrew/bin/wasm-opt -Oz --strip-dwarf --strip-producers --vacuum when available.</div>' \
+'<div class="note">ns/conv reports the timed format-only pass. Roundtrip parsing/validation runs in a separate untimed pass.</div>' \
 "<div class=\"note\">Deep benchmark corpus: <span class=\"js-int\" data-int=\"$$corpus_size\">$$corpus_size</span> values; warmup: <span class=\"js-int\" data-int=\"$$warmup\">$$warmup</span>; random subset: <span class=\"js-int\" data-int=\"$$random_count\">$$random_count</span>; seed: $$seed.</div>" \
 '<div class="note muted">`bit-exact failures` are expected for NaN sign/payload normalization differences across format/parse paths.</div>' \
 '<script>' \

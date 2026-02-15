@@ -658,6 +658,31 @@ static int run_candidate(
   t0 = now_ns();
   for (i = 0u; i < corpus_values->len; ++i) {
     uint64_t in_bits = corpus_values->data[i];
+    double x = double_from_bits(in_bits);
+    size_t out_len = 0u;
+    if (cand->fn(buf, sizeof(buf), x, &out_len)) {
+      out->checksum ^= (uint64_t)(unsigned char)buf[0];
+      out->checksum ^= ((uint64_t)out_len << 8u);
+      len_sum += out_len;
+      len_count += 1u;
+    }
+  }
+  t1 = now_ns();
+
+  out->elapsed_ns = (t1 >= t0) ? (t1 - t0) : 0u;
+  if (out->conversions != 0u) {
+    out->ns_per_conv = (double)out->elapsed_ns / (double)out->conversions;
+  }
+  if (len_count != 0u) {
+    out->avg_len = (double)len_sum / (double)len_count;
+  }
+
+  /*
+   * Validation is intentionally outside the timed formatting loop so roundtrip
+   * parsing does not contaminate formatting ns/conv.
+   */
+  for (i = 0u; i < corpus_values->len; ++i) {
+    uint64_t in_bits = corpus_values->data[i];
     uint64_t parsed_bits = 0u;
     double x = double_from_bits(in_bits);
     double parsed = 0.0;
@@ -689,11 +714,6 @@ static int run_candidate(
           "<format-fail>");
       continue;
     }
-
-    out->checksum ^= (uint64_t)(unsigned char)buf[0];
-    out->checksum ^= ((uint64_t)out_len << 8u);
-    len_sum += out_len;
-    len_count += 1u;
 
     parse_ok = parse_decimal_text(buf, &parsed);
     if (!parse_ok) {
@@ -745,15 +765,6 @@ static int run_candidate(
           parsed_bits,
           buf);
     }
-  }
-  t1 = now_ns();
-
-  out->elapsed_ns = (t1 >= t0) ? (t1 - t0) : 0u;
-  if (out->conversions != 0u) {
-    out->ns_per_conv = (double)out->elapsed_ns / (double)out->conversions;
-  }
-  if (len_count != 0u) {
-    out->avg_len = (double)len_sum / (double)len_count;
   }
   return 1;
 }
