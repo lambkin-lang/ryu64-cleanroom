@@ -204,7 +204,7 @@ build/test/%.o: src/%.c
 
 build/test/test_ryu64.o: test/test_ryu64.c
 	@mkdir -p build/test
-	$(CC) $(CFLAGS_BASE) $(DEPFLAGS) -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -DRYU64_ENABLE_PARSE_BIGINT -c $< -o $@
+	$(CC) $(CFLAGS_BASE) $(DEPFLAGS) -Isrc -DRYU_TIER_FULL -DRYU_TIER_TEST -DRYU_ENABLE_LIBC_ORACLE -DRYU64_ENABLE_PARSE_BIGINT -c $< -o $@
 
 build/wasm-tiny/%.o: src/%.c
 	@mkdir -p build/wasm-tiny
