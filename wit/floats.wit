@@ -14,6 +14,92 @@ interface floats {
         hex,
     }
 
+    /// Character used for the decimal point.
+    variant decimal-point {
+        /// ASCII period '.'
+        dot,
+        /// ASCII comma ','
+        comma,
+        /// Unicode middle dot U+00B7
+        middle-dot,
+        /// Arabic decimal separator U+066B
+        arabic-decimal,
+        /// Any other string.
+        other(string),
+    }
+
+    /// Character used as thousands separator.
+    variant thousands-sep {
+        /// No separator.
+        none,
+        /// ASCII comma ','
+        comma,
+        /// ASCII period '.'
+        dot,
+        /// ASCII space ' '
+        space,
+        /// Unicode narrow no-break space U+202F
+        narrow-nbsp,
+        /// Unicode no-break space U+00A0
+        nbsp,
+        /// ASCII apostrophe
+        apostrophe,
+        /// ASCII underscore
+        underscore,
+        /// Any other string.
+        other(string),
+    }
+
+    /// What happens after explicit group sizes are exhausted.
+    enum grouping-tail {
+        /// No more separators.
+        stop,
+        /// Continue repeating the last group size.
+        repeat-last,
+    }
+
+    /// First group size then repeating subsequent size.
+    record first-then-repeat-rule {
+        first: u8,
+        next: u8,
+    }
+
+    /// Explicit sequence of group sizes.
+    record explicit-grouping-rule {
+        /// Group sizes from least-significant end.
+        groups: list<u8>,
+        /// Behavior after the sequence is exhausted.
+        tail: grouping-tail,
+    }
+
+    /// Rule for how digits are grouped.
+    variant grouping-rule {
+        /// Insert separator every n digits, repeating forever.
+        repeat(u8),
+        /// Use first for the least-significant group, then repeat next.
+        first-then-repeat(first-then-repeat-rule),
+        /// Apply an explicit finite sequence of group sizes from the right.
+        explicit(explicit-grouping-rule),
+    }
+
+    /// Digit grouping configuration.
+    record digit-grouping {
+        /// The grouping rule to apply.
+        rule: grouping-rule,
+        /// If false, do not group when fewer than 2 groups would result.
+        require-separator: bool,
+    }
+
+    /// Locale-specific numeric formatting settings.
+    record numeric-locale {
+        /// Character for the decimal point.
+        decimal-point: decimal-point,
+        /// Character for the thousands separator.
+        thousands-sep: thousands-sep,
+        /// How to group integer digits.
+        grouping: digit-grouping,
+    }
+
     /// Options controlling formatted output.
     record format-options {
         /// Which notation to use.
@@ -40,6 +126,9 @@ interface floats {
         /// Left-align the result within the field width (pad on the right
         /// with spaces).  Overrides zero-pad when both are set.
         left-justify: bool,
+        /// Locale-specific numeric formatting.  If absent, behave like
+        /// POSIX/C locale (decimal '.', no grouping).
+        locale: option<numeric-locale>,
     }
 
     /// Why formatting failed.
@@ -80,7 +169,10 @@ interface floats {
     /// Parse a decimal string to f64.
     /// Accepts: optional sign, decimal digits with optional fraction and
     /// exponent, inf/infinity, nan (case-insensitive).
-    parse-f64: func(text: string) -> result<parsed-f64, parse-error>;
+    /// When locale is provided, thousands separators are stripped and the
+    /// locale decimal point is normalized to '.' before parsing.
+    /// parsed-length reflects bytes consumed from the original input.
+    parse-f64: func(text: string, locale: option<numeric-locale>) -> result<parsed-f64, parse-error>;
 }
 
 world floats-impl {
