@@ -51,6 +51,70 @@ void exports_lambkin_runtime_floats_to_string(double value,
 
 /* --- format-f64 --------------------------------------------------------- */
 
+/*
+ * Apply field-width padding to a formatted result in `buf` of length `len`.
+ * Writes the padded result into `out` (which must have room for `width` bytes)
+ * and returns the final length.
+ *
+ * Printf semantics:
+ *  - left_justify ('-'): pad right with spaces; overrides zero_pad.
+ *  - zero_pad ('0'): pad left with '0' between sign prefix and digits.
+ *    Not applied to inf/nan tokens.
+ *  - Otherwise: pad left with spaces.
+ */
+static size_t apply_width(const char *buf, size_t len, uint32_t width,
+                          bool zero_pad, bool left_justify, char *out) {
+  if (len >= width) {
+    /* Already meets or exceeds width — copy as-is. */
+    for (size_t i = 0; i < len; i++)
+      out[i] = buf[i];
+    return len;
+  }
+
+  size_t pad = width - len;
+
+  if (left_justify) {
+    /* Content then spaces on the right. */
+    for (size_t i = 0; i < len; i++)
+      out[i] = buf[i];
+    for (size_t i = 0; i < pad; i++)
+      out[len + i] = ' ';
+    return width;
+  }
+
+  if (zero_pad) {
+    /* Check for inf/nan — zero-pad is not applied to these. */
+    size_t start = 0;
+    if (len > 0 && (buf[0] == '-' || buf[0] == '+' || buf[0] == ' '))
+      start = 1;
+    bool is_special = false;
+    if (start < len) {
+      char c = buf[start];
+      if (c == 'i' || c == 'I' || c == 'n' || c == 'N')
+        is_special = true;
+    }
+    if (!is_special) {
+      /* Sign prefix, then zeros, then remaining digits. */
+      size_t pos = 0;
+      for (size_t i = 0; i < start; i++)
+        out[pos++] = buf[i];
+      for (size_t i = 0; i < pad; i++)
+        out[pos++] = '0';
+      for (size_t i = start; i < len; i++)
+        out[pos++] = buf[i];
+      return width;
+    }
+    /* Fall through to space-pad for inf/nan. */
+  }
+
+  /* Default: spaces on the left. */
+  for (size_t i = 0; i < pad; i++)
+    out[i] = ' ';
+  for (size_t i = 0; i < len; i++)
+    out[pad + i] = buf[i];
+  return width;
+}
+
 bool exports_lambkin_runtime_floats_format_f64(
     double value,
     exports_lambkin_runtime_floats_format_options_t *options,
@@ -68,6 +132,9 @@ bool exports_lambkin_runtime_floats_format_f64(
   case EXPORTS_LAMBKIN_RUNTIME_FLOATS_NOTATION_GENERAL:
     kind = RYU_FMT_G;
     break;
+  case EXPORTS_LAMBKIN_RUNTIME_FLOATS_NOTATION_HEX:
+    kind = RYU_FMT_A;
+    break;
   default:
     err->tag = EXPORTS_LAMBKIN_RUNTIME_FLOATS_FORMAT_ERROR_INVALID;
     return false;
@@ -81,22 +148,28 @@ bool exports_lambkin_runtime_floats_format_f64(
   spec.always_sign = options->always_sign ? 1 : 0;
   spec.space_sign = options->space_sign ? 1 : 0;
 
-  /* %f of DBL_MAX needs ~800 bytes; 1024 covers all cases with margin. */
+  /* %f of DBL_MAX needs ~800 bytes; 1024 covers the number itself. */
   char buf[1024];
   size_t len;
   ryu_status st = ryu64_to_printf(buf, sizeof(buf), value, &spec, &len);
 
-  switch (st) {
-  case RYU_OK:
-    floats_impl_string_dup_n(ret, buf, len);
-    return true;
-  case RYU_UNSUPPORTED:
-    err->tag = EXPORTS_LAMBKIN_RUNTIME_FLOATS_FORMAT_ERROR_UNSUPPORTED;
-    return false;
-  default:
-    err->tag = EXPORTS_LAMBKIN_RUNTIME_FLOATS_FORMAT_ERROR_INVALID;
+  if (st != RYU_OK) {
+    err->tag = (st == RYU_UNSUPPORTED)
+                   ? EXPORTS_LAMBKIN_RUNTIME_FLOATS_FORMAT_ERROR_UNSUPPORTED
+                   : EXPORTS_LAMBKIN_RUNTIME_FLOATS_FORMAT_ERROR_INVALID;
     return false;
   }
+
+  /* Apply field-width padding if requested. */
+  if (options->width.is_some && (uint32_t)len < options->width.val) {
+    char padded[2048];
+    size_t plen = apply_width(buf, len, options->width.val,
+                              options->zero_pad, options->left_justify, padded);
+    floats_impl_string_dup_n(ret, padded, plen);
+  } else {
+    floats_impl_string_dup_n(ret, buf, len);
+  }
+  return true;
 }
 
 /* --- parse-f64 ---------------------------------------------------------- */

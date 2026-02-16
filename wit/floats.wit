@@ -10,6 +10,8 @@ interface floats {
         scientific,
         /// General — whichever of decimal or scientific is shorter: 123.456
         general,
+        /// Hexadecimal floating-point: 0x1.921fb54442d18p+1
+        hex,
     }
 
     /// Options controlling formatted output.
@@ -19,6 +21,10 @@ interface floats {
         /// Number of fractional digits (decimal/scientific) or significant
         /// digits (general).  none = style default.
         precision: option<u32>,
+        /// Minimum field width.  If the formatted result is shorter, it is
+        /// padded (with spaces by default, or zeros if zero-pad is set).
+        /// none = no minimum width.
+        width: option<u32>,
         /// Uppercase exponent letter and special tokens (E, INF, NAN).
         uppercase: bool,
         /// Keep trailing zeros and always show the decimal point.
@@ -27,6 +33,13 @@ interface floats {
         always-sign: bool,
         /// Show ' ' where '+' would appear (ignored when always-sign is set).
         space-sign: bool,
+        /// Pad with leading zeros between the sign and digits instead of
+        /// spaces.  Only meaningful when width is set.  Ignored for inf/nan.
+        /// Overridden by left-justify.
+        zero-pad: bool,
+        /// Left-align the result within the field width (pad on the right
+        /// with spaces).  Overrides zero-pad when both are set.
+        left-justify: bool,
     }
 
     /// Why formatting failed.

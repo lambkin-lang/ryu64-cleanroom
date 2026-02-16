@@ -368,6 +368,180 @@ static ryu_status ryu_printf_g(
   return RYU_OK;
 }
 
+/*
+ * Hex float formatter (%a/%A).
+ * Emits [-]0xh.hhhhp±d directly from IEEE-754 binary64 bits.
+ * No bigint or decimal conversion required.
+ *
+ * Default precision: minimum hex digits for exact representation (trailing
+ * zero hex digits trimmed, matching C11 §7.21.6.1 ¶8 for FLT_RADIX = 2).
+ * Explicit precision: round mantissa to that many hex digits with
+ * round-to-nearest, ties-to-even.
+ */
+static ryu_status ryu_printf_a(
+    char* out,
+    size_t out_cap,
+    uint64_t abs_bits,
+    int sign,
+    int precision,
+    int uppercase,
+    int alternate_form,
+    int always_sign,
+    int space_sign,
+    size_t* out_len) {
+  const char* hex = uppercase
+      ? "0123456789ABCDEF"
+      : "0123456789abcdef";
+  size_t pos = 0u;
+  uint64_t mant = abs_bits & UINT64_C(0x000FFFFFFFFFFFFF);
+  int bexp = (int)(abs_bits >> 52);
+  int leading;
+  int exponent;
+
+  if (bexp == 0) {
+    leading = 0;
+    exponent = (mant == 0u) ? 0 : -1022;
+  } else {
+    leading = 1;
+    exponent = bexp - 1023;
+  }
+
+  /* Determine effective precision. */
+  int prec;
+  if (precision < 0) {
+    /* Default: minimum hex digits for exact representation. */
+    if (mant == 0u) {
+      prec = 0;
+    } else {
+      prec = 13;
+      {
+        uint64_t m = mant;
+        while (prec > 0 && (m & UINT64_C(0xF)) == 0u) {
+          m >>= 4;
+          prec--;
+        }
+      }
+    }
+  } else {
+    prec = precision;
+  }
+
+  /* Round mantissa when fewer than 13 hex digits requested. */
+  uint64_t frac = mant;
+  if (prec < 13 && mant != 0u) {
+    int shift = (13 - prec) * 4;
+    uint64_t kept = mant >> shift;
+    uint64_t discarded = mant & ((UINT64_C(1) << shift) - 1u);
+    uint64_t half = UINT64_C(1) << (shift - 1);
+    int round_bit;
+    if (prec > 0) {
+      round_bit = (int)(kept & 1u);
+    } else {
+      round_bit = leading & 1;
+    }
+    if (discarded > half || (discarded == half && round_bit)) {
+      kept++;
+      if (prec > 0 && kept >= (UINT64_C(1) << (prec * 4))) {
+        leading++;
+        kept = 0u;
+      } else if (prec == 0) {
+        leading++;
+        kept = 0u;
+      }
+    }
+    frac = kept;
+  }
+
+  /* --- Emit output --- */
+
+  if (!ryu_write_sign(out, out_cap, sign, always_sign, space_sign, &pos)) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+
+  /* "0x" / "0X" prefix */
+  if (pos + 2u >= out_cap) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  out[pos++] = '0';
+  out[pos++] = uppercase ? 'X' : 'x';
+
+  /* Leading hex digit */
+  if (pos >= out_cap) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  out[pos++] = hex[leading & 0xF];
+
+  /* Decimal point + fraction */
+  if (prec > 0 || alternate_form) {
+    if (pos >= out_cap) {
+      return RYU_BUFFER_TOO_SMALL;
+    }
+    out[pos++] = '.';
+  }
+
+  if (prec > 0) {
+    int emit = (prec <= 13) ? prec : 13;
+    if (pos + (size_t)emit >= out_cap) {
+      return RYU_BUFFER_TOO_SMALL;
+    }
+    {
+      int i;
+      for (i = emit - 1; i >= 0; i--) {
+        out[pos++] = hex[(frac >> (i * 4)) & 0xFu];
+      }
+    }
+    if (prec > 13) {
+      size_t pad = (size_t)(prec - 13);
+      if (pos + pad >= out_cap) {
+        return RYU_BUFFER_TOO_SMALL;
+      }
+      {
+        size_t i;
+        for (i = 0u; i < pad; i++) {
+          out[pos++] = '0';
+        }
+      }
+    }
+  }
+
+  /* Exponent: 'p'/'P' ± decimal */
+  if (pos >= out_cap) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  out[pos++] = uppercase ? 'P' : 'p';
+
+  if (pos >= out_cap) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  {
+    uint32_t abs_exp;
+    char tmp[16];
+    size_t n;
+    if (exponent < 0) {
+      out[pos++] = '-';
+      abs_exp = (uint32_t)(-exponent);
+    } else {
+      out[pos++] = '+';
+      abs_exp = (uint32_t)exponent;
+    }
+    n = ryu_u32_to_dec(abs_exp, tmp);
+    if (pos + n >= out_cap) {
+      return RYU_BUFFER_TOO_SMALL;
+    }
+    memcpy(out + pos, tmp, n);
+    pos += n;
+  }
+
+  if (pos >= out_cap) {
+    return RYU_BUFFER_TOO_SMALL;
+  }
+  out[pos] = '\0';
+  if (out_len != NULL) {
+    *out_len = pos;
+  }
+  return RYU_OK;
+}
+
 ryu_status ryu64_to_printf(
     char* out,
     size_t out_cap,
@@ -426,6 +600,13 @@ ryu_status ryu64_to_printf(
       return RYU_BUFFER_TOO_SMALL;
     }
     return RYU_OK;
+  }
+
+  if (spec->kind == RYU_FMT_A) {
+    return ryu_printf_a(
+        out, out_cap, abs_bits, fp.sign,
+        spec->precision, spec->uppercase, spec->alternate_form,
+        spec->always_sign, spec->space_sign, out_len);
   }
 
   if (!ryu_exact_decimal_from_bits(abs_bits, &exact)) {

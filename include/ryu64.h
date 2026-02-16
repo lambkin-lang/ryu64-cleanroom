@@ -63,7 +63,8 @@ ryu_status ryu64_to_shortest(char* out, size_t out_cap, double x, size_t* out_le
 typedef enum {
   RYU_FMT_F = 0,
   RYU_FMT_E = 1,
-  RYU_FMT_G = 2
+  RYU_FMT_G = 2,
+  RYU_FMT_A = 3
 } ryu_fmt_kind;
 
 typedef struct {
