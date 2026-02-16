@@ -31,13 +31,6 @@
 extern "C" {
 #endif
 
-/*
- * Build-tier macros (set by the build system):
- *   RYU_TIER_TINY: shortest + 9sig, tiny/no-libc usage.
- *   RYU_TIER_TEST: enables test-only helpers/builds.
- *   RYU_TIER_FULL: enables printf-style formatting.
- */
-
 typedef enum {
   RYU_OK = 0,
   RYU_BUFFER_TOO_SMALL = 1,
@@ -62,19 +55,10 @@ typedef struct {
 } ryu64_parse_result;
 
 /*
- * 9sig mode policy (Option 2: shortest-but-capped):
- * - If shortest-roundtrip uses <= 9 significant digits, return shortest output.
- * - Otherwise emit a 9-significant-digit scientific form with nearest-even
- *   rounding.
- * - Not all values in capped form are guaranteed to round-trip.
- *
- * Sign/special-token policy:
- * - `ryu64_to_shortest` and `ryu64_to_9sig` are information-preserving
- *   converters and preserve the input sign bit for signed zero, infinities,
- *   and NaN.
+ * Shortest round-trip formatter.
+ * Preserves the input sign bit for signed zero, infinities, and NaN.
  */
 ryu_status ryu64_to_shortest(char* out, size_t out_cap, double x, size_t* out_len);
-ryu_status ryu64_to_9sig(char* out, size_t out_cap, double x, size_t* out_len);
 
 typedef enum {
   RYU_FMT_F = 0,
@@ -93,7 +77,6 @@ typedef struct {
 
 /*
  * Printf-style conversion for binary64.
- * Requires builds with RYU_TIER_FULL.
  * NaN formatting is unsigned ("nan"/"NAN"): sign bit and '+'/' ' flags are
  * ignored for NaN tokens.
  * This is an intentional formatting-layer portability choice because C `printf`
@@ -118,8 +101,8 @@ ryu_status ryu64_to_printf(
  *   - does not consume nan payload syntax; for "nan(payload)" it consumes only
  *     "nan" (or signed prefix + "nan"), leaving "(payload)" as unparsed suffix.
  * - Subnormal-scale decimal texts (for example "5e-324") are outside this
- *   tiny-tier bound and return RYU_PARSE_OUT_OF_RANGE.
- * - Inputs outside the tiny contract return RYU_PARSE_OUT_OF_RANGE.
+ *   bounded contract and return RYU_PARSE_OUT_OF_RANGE.
+ * - Inputs outside the bounded contract return RYU_PARSE_OUT_OF_RANGE.
  */
 ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
 
@@ -134,8 +117,7 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n);
  * - NaN payload syntax "nan(...)" is consumed when payload characters are
  *   ASCII [0-9A-Za-z_], but payload bits are not preserved in output; parser
  *   returns canonical quiet NaN (with sign if requested).
- * - Build macro RYU_BIGINT_MAX_LIMBS (defaults in internal headers are
- *   tier/target-dependent: 512 native non-tiny, 256 tiny/wasm)
+ * - Build macro RYU_BIGINT_MAX_LIMBS (defaults: 512 native, 256 wasm32)
  *   controls bigint capacity, accepted long-mantissa coverage, and parser
  *   stack footprint.
  * - Without that macro, falls back to tiny parser coverage and may return

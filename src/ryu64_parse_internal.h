@@ -37,6 +37,12 @@
 #define RYU_PARSE_FAST_MAX_NEG_EXP10 38
 #define RYU_PARSE_FAST_MAX_POS_EXP10 38
 
+#ifdef RYU64_ENABLE_PARSE_BIGINT
+#define RYU_EISEL_LEMIRE_MIN_EXP10 (-342)
+#define RYU_EISEL_LEMIRE_MAX_EXP10 308
+#define RYU_EISEL_LEMIRE_TABLE_OFFSET 342
+#endif
+
 typedef struct {
   uint64_t hi;
   uint64_t lo;
@@ -44,6 +50,10 @@ typedef struct {
 
 extern const uint64_t ryu64_pow10_u64[20];
 extern const ryu_u128 ryu64_pow10_u128[39];
+
+#ifdef RYU64_ENABLE_PARSE_BIGINT
+extern const ryu_u128 ryu64_pow5_128[651];
+#endif
 
 static inline ryu_u128 ryu_u128_from_u64(uint64_t x) {
   ryu_u128 v;

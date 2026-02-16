@@ -388,36 +388,6 @@ static int oracle_format_text(char* out, size_t out_cap, double x, const ryu_pri
   return n >= 0 && (size_t)n < out_cap;
 }
 
-static unsigned count_significant_digits(const char* s) {
-  unsigned count = 0u;
-  int seen_nonzero = 0;
-  size_t i = 0u;
-
-  if (s[0] == '+' || s[0] == '-') {
-    i += 1u;
-  }
-
-  while (s[i] != '\0' && s[i] != 'e' && s[i] != 'E') {
-    char c = s[i];
-    if (c >= '0' && c <= '9') {
-      if (!seen_nonzero) {
-        if (c != '0') {
-          seen_nonzero = 1;
-          count += 1u;
-        }
-      } else {
-        count += 1u;
-      }
-    }
-    i += 1u;
-  }
-
-  if (count == 0u) {
-    return 1u;
-  }
-  return count;
-}
-
 static int text_has_nonzero_digit_prefix(const char* s, size_t n) {
   size_t i;
   for (i = 0u; i < n; ++i) {
@@ -935,41 +905,6 @@ static int run_shortest_minimality_oracle(const u64_vec* ds, int quick, oracle_s
   return stats->failures == 0u;
 }
 
-static int run_9sig_oracle(const u64_vec* ds, int quick, oracle_stats* stats) {
-  size_t i;
-  size_t stride = quick ? ((ds->len / 3000u) + 1u) : 1u;
-  for (i = 0u; i < ds->len; i += stride) {
-    double x = double_from_bits(ds->data[i]);
-    char text[256];
-    size_t text_len = 0u;
-    ryu_status st;
-    double parsed;
-    size_t parsed_len;
-    unsigned sig;
-    stats->cases += 1u;
-
-    st = ryu64_to_9sig(text, sizeof(text), x, &text_len);
-    if (st != RYU_OK) {
-      stats->failures += 1u;
-      continue;
-    }
-    sig = count_significant_digits(text);
-    if (sig > 9u) {
-      stats->failures += 1u;
-      if (stats->failures <= 20u) {
-        fprintf(stderr, "[9sig] significant digits exceeded: %u str='%s'\n", sig, text);
-      }
-      continue;
-    }
-    if (!oracle_scan_text(text, text_len, &parsed, &parsed_len) || parsed_len != text_len) {
-      stats->failures += 1u;
-      continue;
-    }
-    (void)parsed;
-  }
-  return stats->failures == 0u;
-}
-
 static int compare_scan_full_with_oracle(
     const char* text,
     size_t text_len,
@@ -1358,11 +1293,6 @@ int main(int argc, char** argv) {
   t0 = now_seconds();
   run_shortest_minimality_oracle(&ds, quick, &stats);
   print_summary("shortest-minimality", &mark, &stats, now_seconds() - t0);
-
-  mark = stats;
-  t0 = now_seconds();
-  run_9sig_oracle(&ds, quick, &stats);
-  print_summary("9sig-oracle", &mark, &stats, now_seconds() - t0);
 
   mark = stats;
   t0 = now_seconds();

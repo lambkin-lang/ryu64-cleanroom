@@ -4,7 +4,7 @@ Clean-room, MIT-licensed C11 library for IEEE-754 binary64 (`double`) decimal fo
 
 ## Primary objective
 
-Provide a *smaller* `snprintf`-like formatter and `strtod`-like parser for `double` values than including libc/stdlib directly — while matching or outperforming `snprintf`/`strtod` on the supported cases. The parser is less mature than the formatter and needs more work.
+Provide a *smaller* `snprintf`-like formatter and `strtod`-like parser for `double` values than including libc/stdlib directly — while matching or outperforming `snprintf`/`strtod` on the supported cases.
 
 ## WebAssembly is the primary target
 
@@ -16,7 +16,7 @@ Native builds are useful for development, testing, and benchmarking, but Wasm co
 
 - **No heap allocation** anywhere in library code. Ever.
 - All buffers are caller-provided. All temporaries are stack-allocated or fixed-size.
-- Stack budgets are measured with `-fstack-usage` and documented per tier. Keep them tight — Wasm runtimes have limited stack space.
+- Stack budgets are measured with `-fstack-usage`. Keep them tight — Wasm runtimes have limited stack space.
 - `RYU_BIGINT_MAX_LIMBS` is 256 on wasm32 (1 KB per bigint) vs 512 on native (2 KB). Lowering it reduces stack footprint but also long-mantissa coverage.
 - Minimum supported `RYU_BIGINT_MAX_LIMBS` is 96 (compile-time guard).
 
@@ -28,6 +28,7 @@ This is a **clean-room implementation**. The full protocol is in `docs/CLEANROOM
 - Ulf Adams, "Ryū: fast float-to-string conversion" (PLDI 2018)
 - "Ryū revisited: printf floating point conversion" (ACM)
 - Daniel Lemire et al., "Number Parsing at a Gigabyte per Second"
+- Noble Mushtak and Daniel Lemire, "Fast Number Parsing Without Fallback" (2023)
 - POSIX/C specifications for printf/strtod behavior
 - IEEE-754 binary64 format references
 
@@ -45,24 +46,15 @@ This is a **clean-room implementation**. The full protocol is in `docs/CLEANROOM
 
 ### When making changes
 - Do not introduce libc dependencies into `src/` or `include/` code paths
-- Verify freestanding builds still work: `make wasm-tiny`, `make nolibc-check-speed`, `make nolibc-check-size`
+- Verify freestanding builds still work: `make nolibc-check-speed`, `make nolibc-check-size`
 - Update `docs/IMPLEMENTATION_LOG.md` if consulting any new reference
 - New `.c`/`.h` files must include the MIT license header
-
-## Build tiers
-
-| Tier | Macro | Capabilities | Bigint limbs |
-|------|-------|-------------|--------------|
-| **TINY** | `RYU_TIER_TINY` | shortest + 9sig formatters, tiny parser | 256 (wasm) |
-| **FULL** | `RYU_TIER_FULL` | + printf-style formatter, full bigint parser | 512 (native) / 256 (wasm) |
-| **TEST** | `RYU_TIER_TEST` | FULL + libc oracle harnesses | same as FULL |
 
 ## Key commands
 
 ```
 make test              # Build + run unit tests + quick oracle checks
 make oracle-test       # Run libc differential oracle suite
-make wasm-tiny         # Compile-only wasm32 tiny check
 make wasm-mvp          # Build MVP WASI executable
 make wasm-gcplus       # Build GC+ WASI executable
 make nolibc-check-speed  # Verify freestanding compilation (-O3)
@@ -76,18 +68,18 @@ make shootout-report   # Generate HTML/TSV benchmark reports
 include/ryu64.h          — Public API (the only header consumers include)
 src/ryu64_internal.h     — Internal types and bigint API
 src/ryu64_shortest.c     — Shortest round-trip formatter
-src/ryu64_9sig.c         — 9-significant-digit compact formatter
-src/ryu64_printf.c       — Printf-style formatter (FULL tier only)
+src/ryu64_printf.c       — Printf-style formatter
 src/ryu64_bigint.c       — Arbitrary-precision integer arithmetic
 src/ryu64_parse_tiny.c   — Bounded decimal parser (no heap, ≤19 digits)
 src/ryu64_parse_full.c   — Full-range bigint-backed parser
-src/ryu64_parse_tables.c — Precomputed powers-of-ten constants
+src/ryu64_parse_tables.c — Precomputed parse constants (pow10 + pow5_128 Eisel-Lemire table)
 test/test_ryu64.c        — Unit tests (bigint, formatter, parser, buffer edge cases)
 test/oracle_stdio.c      — Differential oracle tests vs libc
 shootout/deep_bench.c    — Performance benchmarking harness
 wasm_compat/             — Freestanding memcpy/memmove/memcmp/memset/strlen
 wasi/                    — WASI entry point and I/O primitives
-tools/gen_pow10_u128.c   — Reproducible table generator
+tools/gen_pow10_u128.c   — Reproducible pow10 table generator
+tools/gen_pow5_128.c     — Reproducible pow5_128 table generator (Eisel-Lemire)
 docs/CLEANROOM_PROTOCOL.md
 docs/IMPLEMENTATION_LOG.md
 ```
@@ -104,5 +96,6 @@ docs/IMPLEMENTATION_LOG.md
 ## Performance notes
 
 - The formatter uses bigint interval arithmetic (not constant-time O(1) table lookup). This is an intentional clean-room tradeoff for auditability.
+- The parser uses the Eisel-Lemire algorithm (Lemire 2021, Mushtak-Lemire 2023) for `<=19`-digit inputs, providing performance competitive with or faster than libc `strtod`. A bigint-backed fallback handles longer inputs and subnormals.
 - The optional `RYU_ENABLE_POW5_STRIDE_CACHE` accelerates formatting in benchmarks by precomputing pow5 anchors. This uses static memory and atomics — appropriate for native benchmarks, not for the minimal wasm library.
 - Benchmark with `make shootout-report`. Reports go to `build/reports/`.

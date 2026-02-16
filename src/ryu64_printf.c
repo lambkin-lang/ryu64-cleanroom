@@ -26,22 +26,6 @@
 
 #include <string.h>
 
-#if !defined(RYU_TIER_FULL)
-ryu_status ryu64_to_printf(
-    char* out,
-    size_t out_cap,
-    double x,
-    const ryu_printf_spec* spec,
-    size_t* out_len) {
-  (void)out;
-  (void)out_cap;
-  (void)x;
-  (void)spec;
-  (void)out_len;
-  return RYU_UNSUPPORTED;
-}
-#else
-
 static size_t ryu_u32_to_dec(uint32_t v, char* out) {
   char rev[16];
   size_t n = 0u;
@@ -488,4 +472,3 @@ ryu_status ryu64_to_printf(
       return RYU_INVALID;
   }
 }
-#endif

@@ -217,6 +217,139 @@ static ryu_parse_status ryu_fast_int_to_double(
 }
 
 /*
+ * Eisel-Lemire fast path for decimal-to-double conversion.
+ *
+ * Converts w * 10^q to the nearest IEEE-754 binary64 using a single
+ * 64x128-bit multiplication and a precomputed table of 128-bit
+ * approximations of 5^q.
+ *
+ * Handles normal doubles only.  Returns OUT_OF_RANGE for subnormals
+ * (biased exponent <= 0), letting the caller fall back to the existing
+ * bigint path for those rare cases.
+ *
+ * Reference: Daniel Lemire, "Number Parsing at a Gigabyte per Second",
+ *            Software: Practice and Experience 51(8), 2021.
+ * Correctness guarantee (no fallback needed for <= 19-digit significands):
+ *            Noble Mushtak and Daniel Lemire, "Fast Number Parsing Without
+ *            Fallback", Software: Practice and Experience, 2023.
+ */
+static ryu_parse_status ryu_eisel_lemire_to_double(
+    int negative,
+    uint64_t w,
+    int q,
+    double* out_value) {
+  ryu_u128 pow5;
+  ryu_u128 hi_prod;
+  ryu_u128 lo_prod;
+  uint64_t z_lo;
+  uint64_t z_mid;
+  uint64_t z_hi;
+  int upperbit;
+  int shift;
+  uint64_t mantissa;
+  int round_bit;
+  uint64_t trailing;
+  int sticky;
+  int lz;
+  int power2;
+  int biased_exp;
+  uint64_t ieee_mantissa;
+  uint64_t bits;
+
+  if (w == 0u) {
+    bits = negative ? UINT64_C(0x8000000000000000) : UINT64_C(0);
+    *out_value = ryu_double_from_bits_local(bits);
+    return RYU_PARSE_OK;
+  }
+
+  if (q < RYU_EISEL_LEMIRE_MIN_EXP10 || q > RYU_EISEL_LEMIRE_MAX_EXP10) {
+    return RYU_PARSE_OUT_OF_RANGE;
+  }
+
+  /* Normalize w: shift left so MSB is at bit 63. */
+  lz = 63 - (int)ryu_log2_u64(w);
+  w <<= (unsigned)lz;
+
+  /* Table lookup: 128-bit approximation of 5^q, normalized with MSB at bit 127. */
+  pow5 = ryu64_pow5_128[q + RYU_EISEL_LEMIRE_TABLE_OFFSET];
+
+  /* 64x128 -> 192-bit multiply: z = w * pow5.
+   * z_hi  = bits [191..128]
+   * z_mid = bits [127..64]
+   * z_lo  = bits [63..0]
+   */
+  hi_prod = ryu_mul_u64_u64_128(w, pow5.hi);
+  lo_prod = ryu_mul_u64_u64_128(w, pow5.lo);
+
+  z_lo = lo_prod.lo;
+  z_mid = hi_prod.lo + lo_prod.hi;
+  z_hi = hi_prod.hi + (z_mid < hi_prod.lo ? UINT64_C(1) : UINT64_C(0));
+
+  /* Upperbit: is the product's MSB at bit 191 (vs 190)?
+   * This determines whether the mantissa starts at bit 190 or 189. */
+  upperbit = (int)(z_hi >> 63u);
+
+  /* Extract 54 bits (53 mantissa + 1 round bit) from z_hi.
+   * For upperbit=1: bits [63..10] = 54 bits.
+   * For upperbit=0: bits [63..9]  = 55 bits, but MSB is 0, so 54 meaningful. */
+  shift = 9 + upperbit;
+  mantissa = z_hi >> (unsigned)shift;
+
+  /* Round bit is the LSB of the 54-bit extraction. */
+  round_bit = (int)(mantissa & UINT64_C(1));
+  mantissa >>= 1u;
+
+  /* Sticky: any bit below the round position. */
+  trailing = z_hi & ((UINT64_C(1) << (unsigned)shift) - UINT64_C(1));
+  sticky = (trailing | z_mid | z_lo) != 0u;
+
+  /* Round-to-nearest-even. */
+  if (round_bit && (sticky || (mantissa & UINT64_C(1)))) {
+    mantissa += UINT64_C(1);
+  }
+
+  /* Handle mantissa overflow from rounding (53 bits -> 54 bits). */
+  if (mantissa >= (UINT64_C(1) << 53u)) {
+    mantissa >>= 1u;
+    upperbit += 1;
+  }
+
+  /* Binary exponent.
+   * floor(q * log2(10)) is approximated by (q * 217706) >> 16.
+   * 217706 / 65536 = 3.32192993... which approximates log2(10) = 3.32192809...
+   * The error over |q| <= 342 is < 0.001, so the floor is always correct.
+   * Note: q * 217706 fits in 27 bits (max |q|=342), so 32-bit arithmetic suffices.
+   * Using int avoids i64 sign-extension instructions that are unavailable in wasm MVP. */
+  power2 = ((q * 217706) >> 16) + 63 - lz + upperbit;
+  biased_exp = power2 + 1023;
+
+  /* Overflow: value too large for double. */
+  if (biased_exp >= 2047) {
+    return RYU_PARSE_OVERFLOW;
+  }
+
+  /* Subnormal range: fall back to existing paths for correct handling.
+   * Subnormals are rare (only near 5e-324 to 2.2e-308) and the bigint
+   * path handles them correctly. */
+  if (biased_exp <= 0) {
+    return RYU_PARSE_OUT_OF_RANGE;
+  }
+
+  /* Assemble IEEE-754 double. */
+  ieee_mantissa = mantissa & ((UINT64_C(1) << 52u) - UINT64_C(1));
+  bits = ((uint64_t)biased_exp << 52u) | ieee_mantissa;
+  if (negative) {
+    bits |= UINT64_C(1) << 63u;
+  }
+  *out_value = ryu_double_from_bits_local(bits);
+
+  if (round_bit || sticky) {
+    return RYU_PARSE_INEXACT;
+  }
+  return RYU_PARSE_OK;
+}
+
+/*
  * Fixed-width fast path:
  * - significand fits in uint64_t
  * - exponent range is bounded so power-of-ten factors fit in uint128/u192 math
@@ -1111,6 +1244,38 @@ ryu64_parse_result ryu64_from_decimal_full(const char* s, size_t n) {
     return ryu_parse_zero_result(p.negative, p.parsed_len);
   }
 
+  /* Eisel-Lemire fast path: handles <= 19-digit significands with
+   * exponents in [-342, 308] using a single 64x128 multiply + table lookup.
+   * Falls back (returns OUT_OF_RANGE) for subnormals and edge cases. */
+  if (!p.truncated &&
+      p.sig_digits > 0 &&
+      p.sig_digits <= (long long)RYU_PARSE_TINY_MAX_SIG_DIGITS &&
+      p.exp10 >= (long long)RYU_EISEL_LEMIRE_MIN_EXP10 &&
+      p.exp10 <= (long long)RYU_EISEL_LEMIRE_MAX_EXP10) {
+    uint64_t m = 0u;
+    if (p.sig_is_u64) {
+      m = p.sig_u64;
+    } else if (!ryu_bigint_to_u64(&p.sig, &m)) {
+      m = 0u;
+    }
+    if (m != 0u) {
+      st = ryu_eisel_lemire_to_double(p.negative, m, (int)p.exp10, &value);
+    } else {
+      st = RYU_PARSE_INVALID;
+    }
+    if (st == RYU_PARSE_OK || st == RYU_PARSE_INEXACT) {
+      return ryu_parse_result_make(st, value, p.parsed_len);
+    }
+    if (st == RYU_PARSE_OVERFLOW) {
+      return ryu_parse_overflow_result(p.negative, p.parsed_len);
+    }
+    if (st == RYU_PARSE_UNDERFLOW) {
+      return ryu_parse_underflow_result(p.negative, p.parsed_len);
+    }
+    /* OUT_OF_RANGE: fall through to existing fast path or bigint path. */
+  }
+
+  /* Original fixed-width fast path: handles exp10 in [-38, 38]. */
   if (!p.truncated &&
       p.sig_digits > 0 &&
       p.sig_digits <= (long long)RYU_PARSE_TINY_MAX_SIG_DIGITS &&

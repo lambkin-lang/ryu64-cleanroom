@@ -114,13 +114,6 @@ int main(void) {
   st = ryu64_to_shortest(buf, sizeof(buf), __builtin_nan(""), &len);
   check(st == RYU_OK, buf, len);
 
-  /* --- 9sig formatting --- */
-  write_line("--- 9sig ---", 12);
-  for (i = 0; i < NVALS; i++) {
-    st = ryu64_to_9sig(buf, sizeof(buf), kValues[i], &len);
-    check(st == RYU_OK, buf, len);
-  }
-
   /* --- printf %g (default precision) --- */
   write_line("--- printf %g ---", 17);
   {

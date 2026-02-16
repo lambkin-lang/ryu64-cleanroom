@@ -54,10 +54,6 @@ int main(void) {
   if (ryu64_to_shortest(out, sizeof(out), 1.5, &out_len) != RYU_OK || !str_eq(out, "1.5")) {
     return 1;
   }
-  if (ryu64_to_9sig(out, sizeof(out), 1.23456789, &out_len) != RYU_OK || out_len == 0u) {
-    return 2;
-  }
-
   p = ryu64_from_decimal_tiny("1.5", 3u);
   if ((p.status != RYU_PARSE_OK && p.status != RYU_PARSE_INEXACT) ||
       p.parsed_len != 3u ||
@@ -243,7 +239,7 @@ static int run_parser_unit_tests(void) {
     fprintf(stderr, "full parser failed on 1e20 status=%d\n", (int)r.status);
     return 0;
   }
-#if defined(RYU_ENABLE_LIBC_ORACLE)
+#if defined(RYU_TEST_INSTRUMENTATION)
   {
     char* end = NULL;
     double oracle = strtod("1e20", &end);
@@ -354,26 +350,7 @@ static int run_tiny_roundtrip_from_shortest(unsigned iters) {
   return 1;
 }
 
-static int run_9sig_smoke(unsigned iters) {
-  uint64_t state = UINT64_C(0x1122334455667788);
-  unsigned i;
-  for (i = 0u; i < iters; ++i) {
-    double x = double_from_bits(xorshift64(&state));
-    char out[256];
-    size_t out_len = 0u;
-    if (ryu64_to_9sig(out, sizeof(out), x, &out_len) != RYU_OK) {
-      fprintf(stderr, "9sig failed at iter=%u\n", i);
-      return 0;
-    }
-    if (out_len == 0u || out_len >= sizeof(out)) {
-      fprintf(stderr, "9sig bad length at iter=%u\n", i);
-      return 0;
-    }
-  }
-  return 1;
-}
-
-#if defined(RYU_ENABLE_LIBC_ORACLE)
+#if defined(RYU_TEST_INSTRUMENTATION)
 static const uint64_t kPow10U64[20] = {
     UINT64_C(1),
     UINT64_C(10),
@@ -760,7 +737,6 @@ static int run_shortest_minimality_random(unsigned iters) {
 }
 
 static int run_printf_diff(unsigned iters) {
-#if defined(RYU_TIER_FULL)
   static const int precisions[] = {0, 1, 2, 6, 9, 15};
   static const ryu_fmt_kind kinds[] = {RYU_FMT_F, RYU_FMT_E, RYU_FMT_G};
   uint64_t state = UINT64_C(0xfedcba9876543210);
@@ -824,14 +800,10 @@ static int run_printf_diff(unsigned iters) {
       }
     }
   }
-#else
-  (void)iters;
-#endif
   return 1;
 }
 
 static int run_printf_nan_sign_policy(void) {
-#if defined(RYU_TIER_FULL)
   static const uint64_t nan_bits[] = {
       UINT64_C(0x7ff8000000000000),
       UINT64_C(0xfff8000000000000),
@@ -893,7 +865,6 @@ static int run_printf_nan_sign_policy(void) {
       }
     }
   }
-#endif
   return 1;
 }
 
@@ -1322,7 +1293,6 @@ static int run_parse_full_long_truncated_vs_strtod(void) {
 }
 
 static int run_bankers_rounding_via_printf(void) {
-#if defined(RYU_TIER_FULL)
   char ryu_buf[128];
   char libc_buf[128];
   size_t ryu_len = 0u;
@@ -1389,7 +1359,6 @@ static int run_bankers_rounding_via_printf(void) {
       return 0;
     }
   }
-#endif
   return 1;
 }
 
@@ -1490,18 +1459,6 @@ static int run_subnormal_formatting(void) {
       return 0;
     }
 
-    if (ryu64_to_9sig(buf, sizeof(buf), x, &out_len) != RYU_OK) {
-      fprintf(stderr, "subnormal_fmt[%zu]: 9sig failed for bits=0x%016llx\n",
-              i, (unsigned long long)subnormal_bits[i]);
-      return 0;
-    }
-    if (out_len == 0u) {
-      fprintf(stderr, "subnormal_fmt[%zu]: 9sig produced empty output for bits=0x%016llx\n",
-              i, (unsigned long long)subnormal_bits[i]);
-      return 0;
-    }
-
-#if defined(RYU_TIER_FULL)
     {
       char ryu_buf[128];
       char libc_buf[128];
@@ -1524,13 +1481,11 @@ static int run_subnormal_formatting(void) {
         return 0;
       }
     }
-#endif
   }
   return 1;
 }
 
 static int run_printf_edge_cases(void) {
-#if defined(RYU_TIER_FULL)
   char ryu_buf[512];
   char libc_buf[512];
   size_t ryu_len = 0u;
@@ -1694,7 +1649,6 @@ static int run_printf_edge_cases(void) {
       return 0;
     }
   }
-#endif
   return 1;
 }
 
@@ -2303,24 +2257,7 @@ static int run_buffer_too_small(void) {
     }
   }
 
-  /* 9sig buffer boundary */
-  {
-    st = ryu64_to_9sig(big, sizeof(big), 1.23456789e200, &out_len);
-    if (st != RYU_OK) {
-      fprintf(stderr, "buf_too_small: 9sig failed in big buffer\n");
-      return 0;
-    }
-    if (out_len + 1u > 1u) {
-      st = ryu64_to_9sig(small_buf, out_len, 1.23456789e200, &out_len);
-      if (st != RYU_BUFFER_TOO_SMALL) {
-        fprintf(stderr, "buf_too_small: 9sig should fail with size %zu\n", out_len);
-        return 0;
-      }
-    }
-  }
-
   /* printf buffer boundary */
-#if defined(RYU_TIER_FULL)
   {
     ryu_printf_spec pspec;
     pspec.kind = RYU_FMT_E;
@@ -2343,19 +2280,11 @@ static int run_buffer_too_small(void) {
       }
     }
   }
-#endif
 
   /* out_cap=0 should not crash */
   st = ryu64_to_shortest(NULL, 0u, 1.0, &out_len);
   if (st != RYU_BUFFER_TOO_SMALL) {
     fprintf(stderr, "buf_too_small: shortest(NULL,0) should return BUFFER_TOO_SMALL, got %d\n",
-            (int)st);
-    return 0;
-  }
-
-  st = ryu64_to_9sig(NULL, 0u, 1.0, &out_len);
-  if (st != RYU_BUFFER_TOO_SMALL) {
-    fprintf(stderr, "buf_too_small: 9sig(NULL,0) should return BUFFER_TOO_SMALL, got %d\n",
             (int)st);
     return 0;
   }
@@ -2368,9 +2297,6 @@ int main(void) {
     return 1;
   }
   if (!run_tiny_roundtrip_from_shortest(30000u)) {
-    return 1;
-  }
-  if (!run_9sig_smoke(10000u)) {
     return 1;
   }
   if (!run_bigint_basic_ops()) {
@@ -2392,7 +2318,7 @@ int main(void) {
     return 1;
   }
 
-#if defined(RYU_ENABLE_LIBC_ORACLE)
+#if defined(RYU_TEST_INSTRUMENTATION)
   if (!run_roundtrip_edges()) {
     return 1;
   }

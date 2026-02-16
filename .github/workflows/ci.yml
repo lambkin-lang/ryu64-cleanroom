@@ -44,6 +44,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make wasm-tiny
           make nolibc-check-speed
           make nolibc-check-size
