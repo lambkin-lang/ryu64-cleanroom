@@ -59,6 +59,7 @@ make wasm-mvp          # Build MVP WASI executable
 make wasm-gcplus       # Build GC+ WASI executable
 make nolibc-check-speed  # Verify freestanding compilation (-O3)
 make nolibc-check-size   # Verify freestanding compilation (-Oz)
+make wit-check           # Validate WIT interface definition
 make shootout-report   # Generate HTML/TSV benchmark reports
 ```
 
@@ -66,6 +67,8 @@ make shootout-report   # Generate HTML/TSV benchmark reports
 
 ```
 include/ryu64.h          — Public API (the only header consumers include)
+wit/floats.wit           — WIT interface definition (lambkin:runtime floats)
+wit/floats_impl.c        — WIT-to-ryu64 adapter (implements generated function signatures)
 src/ryu64_internal.h     — Internal types and bigint API
 src/ryu64_shortest.c     — Shortest round-trip formatter
 src/ryu64_printf.c       — Printf-style formatter

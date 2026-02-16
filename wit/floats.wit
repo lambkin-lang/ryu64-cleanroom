@@ -1,0 +1,75 @@
+package lambkin:runtime@0.1.0;
+
+/// IEEE-754 binary64 (f64) formatting and parsing.
+interface floats {
+    /// Notation style for formatted output.
+    enum notation {
+        /// Fixed-point decimal: 123.456000
+        decimal,
+        /// Scientific/exponential: 1.234560e+02
+        scientific,
+        /// General — whichever of decimal or scientific is shorter: 123.456
+        general,
+    }
+
+    /// Options controlling formatted output.
+    record format-options {
+        /// Which notation to use.
+        notation: notation,
+        /// Number of fractional digits (decimal/scientific) or significant
+        /// digits (general).  none = style default.
+        precision: option<u32>,
+        /// Uppercase exponent letter and special tokens (E, INF, NAN).
+        uppercase: bool,
+        /// Keep trailing zeros and always show the decimal point.
+        alternate-form: bool,
+        /// Show '+' on non-negative values.
+        always-sign: bool,
+        /// Show ' ' where '+' would appear (ignored when always-sign is set).
+        space-sign: bool,
+    }
+
+    /// Why formatting failed.
+    variant format-error {
+        /// Requested notation or option is not supported by this build.
+        unsupported,
+        /// Invalid option combination.
+        invalid,
+    }
+
+    /// Why parsing failed.
+    variant parse-error {
+        /// Input is not valid decimal float syntax.
+        invalid,
+        /// Value is outside representable range or parser coverage.
+        out-of-range,
+        /// Feature not available in this build configuration.
+        unsupported,
+    }
+
+    /// A successfully parsed f64 with consumption info.
+    record parsed-f64 {
+        /// The parsed IEEE-754 binary64 value.
+        value: f64,
+        /// Number of input bytes consumed.
+        parsed-length: u32,
+    }
+
+    /// Shortest round-trip decimal representation.
+    /// Always succeeds — every f64 (including ±0, ±inf, NaN) has a
+    /// valid shortest form.
+    to-string: func(value: f64) -> string;
+
+    /// Format an f64 with explicit notation and options.
+    /// NaN is always unsigned ("nan"/"NAN") regardless of sign flags.
+    format-f64: func(value: f64, options: format-options) -> result<string, format-error>;
+
+    /// Parse a decimal string to f64.
+    /// Accepts: optional sign, decimal digits with optional fraction and
+    /// exponent, inf/infinity, nan (case-insensitive).
+    parse-f64: func(text: string) -> result<parsed-f64, parse-error>;
+}
+
+world floats-impl {
+    export floats;
+}

@@ -45,6 +45,8 @@ WASM_OPT_HAS_STRIP_DWARF := $(shell $(WASM_OPT) --help 2>/dev/null | grep -q -- 
 WASM_OPT_HAS_STRIP_PRODUCERS := $(shell $(WASM_OPT) --help 2>/dev/null | grep -q -- '--strip-producers' && printf '%s' '--strip-producers')
 WASM_OPT_HAS_VACUUM := $(shell $(WASM_OPT) --help 2>/dev/null | grep -q -- '--vacuum' && printf '%s' '--vacuum')
 WASM_OPT_POST_FLAGS = -Oz $(WASM_OPT_HAS_STRIP_DWARF) $(WASM_OPT_HAS_STRIP_PRODUCERS) $(WASM_OPT_HAS_VACUUM)
+WASM_TOOLS ?= wasm-tools
+WIT_BINDGEN ?= wit-bindgen
 
 UNAME_S := $(shell uname -s)
 
@@ -114,7 +116,7 @@ DEPS = \
 	$(OBJ_WASI_GCPLUS:.o=.d) \
 	build/test/test_ryu64.d
 
-.PHONY: all test oracle-test benchmark-speed benchmark-size nolibc-check-speed nolibc-check-size wasm-mvp wasm-gcplus wasm-run wasm-run-mvp wasm-run-gcplus wasm-compare shootout shootout-bench shootout-report shootout-report-size shootout-report-perf shootout-report-html shootout-track stride-investigation stride-investigation-data stride-investigation-html gen-parse-pow10 gen-parse-pow5 clean
+.PHONY: all test oracle-test benchmark-speed benchmark-size nolibc-check-speed nolibc-check-size wit-check wit-bindings wasm-mvp wasm-gcplus wasm-run wasm-run-mvp wasm-run-gcplus wasm-compare shootout shootout-bench shootout-report shootout-report-size shootout-report-perf shootout-report-html shootout-track stride-investigation stride-investigation-data stride-investigation-html gen-parse-pow10 gen-parse-pow5 clean
 
 all: build/libryu64.a
 
@@ -134,6 +136,30 @@ benchmark-size: build/oracle_ryu64_size
 nolibc-check-speed: $(OBJ_NOLIBC_SPEED) $(OBJ_WASM_COMPAT_SPEED)
 
 nolibc-check-size: $(OBJ_NOLIBC_SIZE) $(OBJ_WASM_COMPAT_SIZE)
+
+wit-check: wit/floats.wit
+	$(WASM_TOOLS) component wit wit/floats.wit -o /dev/null
+	@echo "WIT validation passed"
+
+wit-bindings: wit/floats.wit
+	@mkdir -p build/wit-bindings
+	$(WIT_BINDGEN) c wit/floats.wit -w floats-impl --out-dir build/wit-bindings --no-object-file
+
+WIT_IMPL_CFLAGS = $(CFLAGS_BASE) -Ibuild/wit-bindings -DRYU64_ENABLE_PARSE_BIGINT
+
+build/wit-bindings/floats_impl.o: build/wit-bindings/floats_impl.c build/wit-bindings/floats_impl.h
+	$(CC) $(WIT_IMPL_CFLAGS) -c $< -o $@
+
+build/wit-impl/floats_impl.o: wit/floats_impl.c build/wit-bindings/floats_impl.h include/ryu64.h
+	@mkdir -p build/wit-impl
+	$(CC) $(WIT_IMPL_CFLAGS) -c $< -o $@
+
+build/wit-impl/test_wit.o: test/test_wit.c build/wit-bindings/floats_impl.h
+	@mkdir -p build/wit-impl
+	$(CC) $(WIT_IMPL_CFLAGS) -c $< -o $@
+
+build/wit-test: build/wit-bindings/floats_impl.o build/wit-impl/floats_impl.o build/wit-impl/test_wit.o $(OBJ_TEST)
+	$(CC) $(WIT_IMPL_CFLAGS) -o $@ $^
 
 wasm-mvp: build/ryu64_smoke_mvp.wasm
 
