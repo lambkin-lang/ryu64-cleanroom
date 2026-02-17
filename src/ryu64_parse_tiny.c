@@ -205,7 +205,7 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n) {
     if (d != 0u || saw_nonzero) {
       saw_nonzero = 1;
       if (sig_digits < RYU_PARSE_TINY_MAX_SIG_DIGITS) {
-        sig = sig * UINT64_C(10) + (uint64_t)d;
+        sig = (sig * UINT64_C(10)) + (uint64_t)d;
         sig_digits += 1u;
       } else {
         too_many_sig = 1;
@@ -222,7 +222,7 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n) {
       if (d != 0u || saw_nonzero) {
         saw_nonzero = 1;
         if (sig_digits < RYU_PARSE_TINY_MAX_SIG_DIGITS) {
-          sig = sig * UINT64_C(10) + (uint64_t)d;
+          sig = (sig * UINT64_C(10)) + (uint64_t)d;
           sig_digits += 1u;
         } else {
           too_many_sig = 1;
@@ -257,7 +257,7 @@ ryu64_parse_result ryu64_from_decimal_tiny(const char* s, size_t n) {
     while (j < n && ryu_ascii_isdigit(s[j])) {
       have_exp_digit = 1;
       if (exp_part < 1000000) {
-        exp_part = exp_part * 10 + (int)(s[j] - '0');
+        exp_part = (exp_part * 10) + (int)(s[j] - '0');
       }
       j += 1u;
     }

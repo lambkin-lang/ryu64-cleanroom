@@ -624,6 +624,10 @@ build/shootout_deep_gcplus_raw.wasm: $(SRC) shootout/deep_bench.c
 build/shootout_deep_gcplus.wasm: build/shootout_deep_gcplus_raw.wasm
 	$(WASM_OPT) $(WASM_OPT_POST_FLAGS) $< -o $@
 
+lint:
+	@echo "Linting sources..."
+	clang-tidy $(SRC) -- $(CFLAGS_BASE) -Isrc
+
 clean:
 	$(RM) -r build
 

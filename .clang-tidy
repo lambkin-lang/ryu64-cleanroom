@@ -1,0 +1,7 @@
+---
+Checks: "bugprone-*,cert-*,clang-analyzer-*,misc-*,performance-*,portability-*,readability-*,-readability-identifier-length,-readability-function-cognitive-complexity,-llvmlibc-*,-llvm-*,-readability-magic-numbers,-readability-uppercase-literal-suffix,-misc-include-cleaner,-bugprone-easily-swappable-parameters,-readability-avoid-nested-conditional-operator"
+WarningsAsErrors: "*"
+HeaderFilterRegex: "src/.*|include/.*"
+CheckOptions:
+  - key:             readability-identifier-naming.VariableCase
+    value:           lower_case

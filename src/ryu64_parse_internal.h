@@ -141,7 +141,7 @@ static inline unsigned ryu_u128_bitlen(const ryu_u128* v) {
 
 static inline ryu_u128 ryu_mul_u64_u64_128(uint64_t a, uint64_t b) {
   ryu_u128 out;
-#if defined(__SIZEOF_INT128__)
+#ifdef __SIZEOF_INT128__
   __uint128_t p = ((__uint128_t)a) * ((__uint128_t)b);
   out.lo = (uint64_t)p;
   out.hi = (uint64_t)(p >> 64u);

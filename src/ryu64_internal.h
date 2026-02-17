@@ -33,7 +33,7 @@
 #define RYU_BIGINT_BASE 1000000000u
 #define RYU_BIGINT_BASE_DIGITS 9u
 #ifndef RYU_BIGINT_MAX_LIMBS
-#if defined(__wasm32__)
+#ifdef __wasm32__
 #define RYU_BIGINT_MAX_LIMBS 256u
 #else
 #define RYU_BIGINT_MAX_LIMBS 512u

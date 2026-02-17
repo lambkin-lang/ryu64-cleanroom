@@ -26,7 +26,7 @@
 
 #include <string.h>
 
-static const uint32_t kPow10Small[9] = {
+static const uint32_t bg_pow10_small[9] = {
     1u,
     10u,
     100u,
@@ -38,7 +38,7 @@ static const uint32_t kPow10Small[9] = {
     100000000u,
 };
 
-static const uint32_t kPow5Small[14] = {
+static const uint32_t bg_pow5_small[14] = {
     1u,
     5u,
     25u,
@@ -55,7 +55,7 @@ static const uint32_t kPow5Small[14] = {
     1220703125u,
 };
 
-#if defined(RYU_ENABLE_BIGINT_PROFILE)
+#ifdef RYU_ENABLE_BIGINT_PROFILE
 #define RYU_BIGINT_PROFILE_SCOPE_FORMAT 0u
 #define RYU_BIGINT_PROFILE_SCOPE_PARSE 1u
 #define RYU_BIGINT_PROFILE_SCOPE_COUNT 2u
@@ -289,7 +289,7 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
     return 1;
   }
   for (i = 0u; i < a->len; ++i) {
-    uint64_t prod = (uint64_t)a->limb[i] * (uint64_t)m + carry;
+    uint64_t prod = ((uint64_t)a->limb[i] * (uint64_t)m) + carry;
     a->limb[i] = (uint32_t)(prod % (uint64_t)RYU_BIGINT_BASE);
     carry = prod / (uint64_t)RYU_BIGINT_BASE;
   }
@@ -308,7 +308,7 @@ int ryu_bigint_mul_small(ryu_bigint* a, uint32_t m) {
 int ryu_bigint_mul_pow5(ryu_bigint* a, unsigned p) {
   while (p != 0u) {
     unsigned chunk = (p > 13u) ? 13u : p;
-    if (!ryu_bigint_mul_small(a, kPow5Small[chunk])) {
+    if (!ryu_bigint_mul_small(a, bg_pow5_small[chunk])) {
       return 0;
     }
     p -= chunk;
@@ -322,7 +322,7 @@ int ryu_bigint_mul_pow10(ryu_bigint* a, unsigned p) {
   if (ryu_bigint_is_zero(a)) {
     return 1;
   }
-  if (r != 0u && !ryu_bigint_mul_small(a, kPow10Small[r])) {
+  if (r != 0u && !ryu_bigint_mul_small(a, bg_pow10_small[r])) {
     return 0;
   }
   if (q == 0u) {
@@ -362,7 +362,7 @@ static int ryu_bigint_div_small(ryu_bigint* a, uint32_t div, uint32_t* rem_out) 
     return 0;
   }
   for (idx = a->len; idx > 0u; --idx) {
-    uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx - 1u];
+    uint64_t cur = (carry * (uint64_t)RYU_BIGINT_BASE) + (uint64_t)a->limb[idx - 1u];
     a->limb[idx - 1u] = (uint32_t)(cur / (uint64_t)div);
     carry = cur % (uint64_t)div;
   }
@@ -373,7 +373,7 @@ static int ryu_bigint_div_small(ryu_bigint* a, uint32_t div, uint32_t* rem_out) 
   return 1;
 }
 
-#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+#ifdef RYU_ENABLE_POW5_STRIDE_CACHE
 static int ryu_bigint_mul_u64(ryu_bigint* a, uint64_t m) {
   uint32_t lo;
   uint64_t hi64;
@@ -421,7 +421,7 @@ static int ryu_bigint_mul_u64(ryu_bigint* a, uint64_t m) {
 }
 #endif
 
-#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+#ifdef RYU_ENABLE_POW5_STRIDE_CACHE
 #ifndef RYU_POW5_STRIDE
 #define RYU_POW5_STRIDE 16u
 #endif
@@ -507,7 +507,7 @@ int ryu_bigint_to_u64(const ryu_bigint* a, uint64_t* out) {
     if (acc > UINT64_MAX / (uint64_t)RYU_BIGINT_BASE) {
       return 0;
     }
-    next = acc * (uint64_t)RYU_BIGINT_BASE + (uint64_t)a->limb[idx];
+    next = (acc * (uint64_t)RYU_BIGINT_BASE) + (uint64_t)a->limb[idx];
     if (next < acc) {
       return 0;
     }
@@ -657,12 +657,12 @@ int ryu_bigint_div_pow10_floor(
   }
 
   if (r != 0u) {
-    uint32_t div = kPow10Small[r];
+    uint32_t div = bg_pow10_small[r];
     uint64_t carry = 0u;
     i = q->len;
     while (i > 0u) {
       size_t idx = i - 1u;
-      uint64_t cur = carry * (uint64_t)RYU_BIGINT_BASE + (uint64_t)q->limb[idx];
+      uint64_t cur = (carry * (uint64_t)RYU_BIGINT_BASE) + (uint64_t)q->limb[idx];
       q->limb[idx] = (uint32_t)(cur / (uint64_t)div);
       carry = cur % (uint64_t)div;
       i -= 1u;
@@ -812,7 +812,7 @@ int ryu_exact_decimal_from_bits(uint64_t abs_bits, ryu_decimal_exact* out) {
     out->scale = 0u;
   } else {
     unsigned d = (unsigned)(-fp.exp2);
-#if defined(RYU_ENABLE_POW5_STRIDE_CACHE)
+#ifdef RYU_ENABLE_POW5_STRIDE_CACHE
     if (!ryu_bigint_from_pow5_stride(d, &out->digits)) {
       return 0;
     }
@@ -1363,9 +1363,9 @@ static int ryu_round_integer_div_pow10(
       tail_nonzero = 1;
     }
   } else {
-    uint32_t div = kPow10Small[r];
+    uint32_t div = bg_pow10_small[r];
     uint32_t rem = 0u;
-    uint32_t low_mask = kPow10Small[r - 1u];
+    uint32_t low_mask = bg_pow10_small[r - 1u];
     if (!ryu_bigint_div_small(rounded, div, &rem)) {
       return 0;
     }

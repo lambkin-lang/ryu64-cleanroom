@@ -461,10 +461,7 @@ static ryu_status ryu_printf_a(
       }
       if (should_round_up) {
         kept++;
-        if (prec > 0 && kept >= (UINT64_C(1) << (prec * 4))) {
-          leading++;
-          kept = 0u;
-        } else if (prec == 0) {
+        if ((prec == 0) || (kept >= (UINT64_C(1) << (prec * 4)))) {
           leading++;
           kept = 0u;
         }

@@ -24,10 +24,10 @@
 
 #include "ryu64_parse_internal.h"
 
-#if defined(RYU64_ENABLE_PARSE_BIGINT)
+#ifdef RYU64_ENABLE_PARSE_BIGINT
 #include "ryu64_internal.h"
 
-#if defined(RYU_ENABLE_BIGINT_PROFILE)
+#ifdef RYU_ENABLE_BIGINT_PROFILE
 void ryu_bigint_profile_note_len(size_t len);
 #endif
 
