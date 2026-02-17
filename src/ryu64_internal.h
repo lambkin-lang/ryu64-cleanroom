@@ -146,12 +146,16 @@ int ryu_round_exact_to_significant(
     const ryu_decimal_exact* exact,
     unsigned sig_digits,
     ryu_bigint* out_rounded,
-    int* out_exp10);
+    int* out_exp10,
+    int rounding_mode,
+    int negative);
 
 int ryu_round_exact_to_fractional(
     const ryu_decimal_exact* exact,
     unsigned frac_digits,
-    ryu_bigint* out_rounded);
+    ryu_bigint* out_rounded,
+    int rounding_mode,
+    int negative);
 
 int ryu_emit_fixed_from_scaled(
     char* out,

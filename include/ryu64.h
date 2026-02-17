@@ -67,6 +67,13 @@ typedef enum {
   RYU_FMT_A = 3
 } ryu_fmt_kind;
 
+typedef enum {
+  RYU_ROUND_NEAREST_EVEN = 0,  /* default, backward compatible */
+  RYU_ROUND_TOWARD_ZERO  = 1,
+  RYU_ROUND_TOWARD_POS   = 2,
+  RYU_ROUND_TOWARD_NEG   = 3
+} ryu_rounding_mode;
+
 typedef struct {
   ryu_fmt_kind kind;
   int precision;      /* -1 = default semantics per kind */
@@ -74,6 +81,7 @@ typedef struct {
   int alternate_form; /* '#' */
   int always_sign;    /* '+' */
   int space_sign;     /* ' ' */
+  int rounding_mode;  /* ryu_rounding_mode, 0 = nearest-even */
 } ryu_printf_spec;
 
 /*

@@ -100,6 +100,18 @@ interface floats {
         grouping: digit-grouping,
     }
 
+    /// Rounding mode for precision-limited formatting.
+    enum rounding-mode {
+        /// Round to nearest, ties to even (default, IEEE-754).
+        nearest-even,
+        /// Truncate toward zero.
+        toward-zero,
+        /// Round toward positive infinity.
+        toward-positive,
+        /// Round toward negative infinity.
+        toward-negative,
+    }
+
     /// Options controlling formatted output.
     record format-options {
         /// Which notation to use.
@@ -129,6 +141,8 @@ interface floats {
         /// Locale-specific numeric formatting.  If absent, behave like
         /// POSIX/C locale (decimal '.', no grouping).
         locale: option<numeric-locale>,
+        /// Rounding mode for precision-limited formatting.
+        rounding: rounding-mode,
     }
 
     /// Why formatting failed.

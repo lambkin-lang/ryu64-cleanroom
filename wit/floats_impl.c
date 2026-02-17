@@ -533,6 +533,7 @@ bool exports_lambkin_runtime_floats_format_f64(
   spec.alternate_form = options->alternate_form ? 1 : 0;
   spec.always_sign = options->always_sign ? 1 : 0;
   spec.space_sign = options->space_sign ? 1 : 0;
+  spec.rounding_mode = (int)options->rounding;
 
   /* %f of DBL_MAX needs ~800 bytes; 1024 covers the number itself. */
   char buf[1024];

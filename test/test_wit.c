@@ -109,6 +109,8 @@ static void test_format_f64(void) {
   opts.space_sign = false;
   opts.zero_pad = false;
   opts.left_justify = false;
+  opts.locale.is_some = false;
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
 
   ok = exports_lambkin_runtime_floats_format_f64(3.14, &opts, &ret, &err);
   check(ok, "format_f64 %g 3.14 succeeds");
@@ -295,6 +297,8 @@ static void test_hex_float(void) {
   opts.space_sign = false;
   opts.zero_pad = false;
   opts.left_justify = false;
+  opts.locale.is_some = false;
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
 
   /* %a of 0.0 → "0x0p+0" */
   ok = exports_lambkin_runtime_floats_format_f64(0.0, &opts, &ret, &err);
@@ -440,6 +444,7 @@ static void test_locale_format(void) {
   opts.zero_pad = false;
   opts.left_justify = false;
   opts.locale.is_some = false;
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
 
   /* --- Decimal point replacement --- */
 
@@ -746,6 +751,7 @@ static void test_locale_parse(void) {
     opts.left_justify = false;
     opts.locale.is_some = true;
     opts.locale.val = de_loc;
+    opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
 
     ok = exports_lambkin_runtime_floats_format_f64(1234567.89, &opts,
                                                     &formatted, &ferr);
@@ -771,6 +777,161 @@ static void test_locale_parse(void) {
   check(ret.parsed_length == 4, "locale-parse c-locale fast path length");
 }
 
+/* --- rounding-mode tests ------------------------------------------------ */
+
+static void init_opts_default(
+    exports_lambkin_runtime_floats_format_options_t *o) {
+  o->notation = EXPORTS_LAMBKIN_RUNTIME_FLOATS_NOTATION_DECIMAL;
+  o->precision.is_some = false;
+  o->width.is_some = false;
+  o->uppercase = false;
+  o->alternate_form = false;
+  o->always_sign = false;
+  o->space_sign = false;
+  o->zero_pad = false;
+  o->left_justify = false;
+  o->locale.is_some = false;
+  o->rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
+}
+
+static void test_rounding_modes(void) {
+  floats_impl_string_t ret;
+  exports_lambkin_runtime_floats_format_error_t err;
+  exports_lambkin_runtime_floats_format_options_t opts;
+  bool ok;
+
+  init_opts_default(&opts);
+  opts.precision.is_some = true;
+
+  /* --- %.1f of 2.25 (exact tie: digit is 5, last kept is 2=even) --- */
+  opts.precision.val = 1;
+
+  /* nearest-even: 2.25 → "2.2" (tie, 2 is even → round down) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
+  ok = exports_lambkin_runtime_floats_format_f64(2.25, &opts, &ret, &err);
+  check(ok, "round nearest-even %.1f 2.25 ok");
+  check(str_eq(&ret, "2.2"), "round nearest-even %.1f 2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-zero: 2.25 → "2.2" (truncate) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_ZERO;
+  ok = exports_lambkin_runtime_floats_format_f64(2.25, &opts, &ret, &err);
+  check(ok, "round toward-zero %.1f 2.25 ok");
+  check(str_eq(&ret, "2.2"), "round toward-zero %.1f 2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-positive: 2.25 → "2.3" (positive, nonzero discarded) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_POSITIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(2.25, &opts, &ret, &err);
+  check(ok, "round toward-pos %.1f 2.25 ok");
+  check(str_eq(&ret, "2.3"), "round toward-pos %.1f 2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-negative: 2.25 → "2.2" (positive, round toward -inf = truncate) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_NEGATIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(2.25, &opts, &ret, &err);
+  check(ok, "round toward-neg %.1f 2.25 ok");
+  check(str_eq(&ret, "2.2"), "round toward-neg %.1f 2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* --- %.1f of -2.25 (negative, exact tie) --- */
+
+  /* nearest-even: -2.25 → "-2.2" (tie, 2 is even) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
+  ok = exports_lambkin_runtime_floats_format_f64(-2.25, &opts, &ret, &err);
+  check(ok, "round nearest-even %.1f -2.25 ok");
+  check(str_eq(&ret, "-2.2"), "round nearest-even %.1f -2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-positive: -2.25 → "-2.2" (negative, toward +inf = truncate mag) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_POSITIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(-2.25, &opts, &ret, &err);
+  check(ok, "round toward-pos %.1f -2.25 ok");
+  check(str_eq(&ret, "-2.2"), "round toward-pos %.1f -2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-negative: -2.25 → "-2.3" (negative, toward -inf = round mag up) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_NEGATIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(-2.25, &opts, &ret, &err);
+  check(ok, "round toward-neg %.1f -2.25 ok");
+  check(str_eq(&ret, "-2.3"), "round toward-neg %.1f -2.25 value");
+  floats_impl_string_free(&ret);
+
+  /* --- %.0f of 2.5 (exact tie: digit is 5, last kept is 2=even) --- */
+  opts.precision.val = 0;
+
+  /* nearest-even: 2.5 → "2" (tie, 2 is even → round down) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
+  ok = exports_lambkin_runtime_floats_format_f64(2.5, &opts, &ret, &err);
+  check(ok, "round nearest-even %.0f 2.5 ok");
+  check(str_eq(&ret, "2"), "round nearest-even %.0f 2.5 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-positive: 2.5 → "3" (positive, nonzero discarded) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_POSITIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(2.5, &opts, &ret, &err);
+  check(ok, "round toward-pos %.0f 2.5 ok");
+  check(str_eq(&ret, "3"), "round toward-pos %.0f 2.5 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-zero: 2.5 → "2" (truncate) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_ZERO;
+  ok = exports_lambkin_runtime_floats_format_f64(2.5, &opts, &ret, &err);
+  check(ok, "round toward-zero %.0f 2.5 ok");
+  check(str_eq(&ret, "2"), "round toward-zero %.0f 2.5 value");
+  floats_impl_string_free(&ret);
+
+  /* --- %.2e scientific with rounding --- */
+  opts.notation = EXPORTS_LAMBKIN_RUNTIME_FLOATS_NOTATION_SCIENTIFIC;
+  opts.precision.val = 2;
+
+  /* toward-zero: 1.235 → "1.23e+00" (truncate to 2 frac digits) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_ZERO;
+  ok = exports_lambkin_runtime_floats_format_f64(1.235, &opts, &ret, &err);
+  check(ok, "round toward-zero %.2e 1.235 ok");
+  check(str_eq(&ret, "1.23e+00"), "round toward-zero %.2e 1.235 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-positive: 1.235 → "1.24e+00" */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_POSITIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(1.235, &opts, &ret, &err);
+  check(ok, "round toward-pos %.2e 1.235 ok");
+  check(str_eq(&ret, "1.24e+00"), "round toward-pos %.2e 1.235 value");
+  floats_impl_string_free(&ret);
+
+  /* --- hex float rounding --- */
+  opts.notation = EXPORTS_LAMBKIN_RUNTIME_FLOATS_NOTATION_HEX;
+  opts.precision.val = 0;
+
+  /* %.0a of 1.5 = 0x1.8p+0, nearest-even: round up (tie, 1 is odd) → "0x2p+0" */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_NEAREST_EVEN;
+  ok = exports_lambkin_runtime_floats_format_f64(1.5, &opts, &ret, &err);
+  check(ok, "round nearest-even %.0a 1.5 ok");
+  check(str_eq(&ret, "0x2p+0"), "round nearest-even %.0a 1.5 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-zero: 1.5 → "0x1p+0" (truncate) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_ZERO;
+  ok = exports_lambkin_runtime_floats_format_f64(1.5, &opts, &ret, &err);
+  check(ok, "round toward-zero %.0a 1.5 ok");
+  check(str_eq(&ret, "0x1p+0"), "round toward-zero %.0a 1.5 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-positive: -1.5 → "-0x1p+0" (neg, toward +inf = truncate mag) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_POSITIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(-1.5, &opts, &ret, &err);
+  check(ok, "round toward-pos %.0a -1.5 ok");
+  check(str_eq(&ret, "-0x1p+0"), "round toward-pos %.0a -1.5 value");
+  floats_impl_string_free(&ret);
+
+  /* toward-negative: -1.5 → "-0x2p+0" (neg, toward -inf = round mag up) */
+  opts.rounding = EXPORTS_LAMBKIN_RUNTIME_FLOATS_ROUNDING_MODE_TOWARD_NEGATIVE;
+  ok = exports_lambkin_runtime_floats_format_f64(-1.5, &opts, &ret, &err);
+  check(ok, "round toward-neg %.0a -1.5 ok");
+  check(str_eq(&ret, "-0x2p+0"), "round toward-neg %.0a -1.5 value");
+  floats_impl_string_free(&ret);
+}
+
 /* --- main --------------------------------------------------------------- */
 
 int main(void) {
@@ -780,6 +941,7 @@ int main(void) {
   test_hex_float();
   test_locale_format();
   test_locale_parse();
+  test_rounding_modes();
 
   fprintf(stderr, "wit-test: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail > 0 ? 1 : 0;

@@ -201,6 +201,7 @@ static ryu_status ryu_printf_e(
     int alternate_form,
     int always_sign,
     int space_sign,
+    int rounding_mode,
     size_t* out_len) {
   ryu_bigint rounded;
   int exp10 = 0;
@@ -228,7 +229,8 @@ static ryu_status ryu_printf_e(
     return RYU_OK;
   }
 
-  if (!ryu_round_exact_to_significant(exact, (unsigned)(precision + 1), &rounded, &exp10)) {
+  if (!ryu_round_exact_to_significant(exact, (unsigned)(precision + 1), &rounded, &exp10,
+                                       rounding_mode, negative)) {
     return RYU_UNSUPPORTED;
   }
 
@@ -259,6 +261,7 @@ static ryu_status ryu_printf_f(
     int alternate_form,
     int always_sign,
     int space_sign,
+    int rounding_mode,
     size_t* out_len) {
   ryu_bigint rounded;
 
@@ -266,7 +269,8 @@ static ryu_status ryu_printf_f(
     precision = 6;
   }
 
-  if (!ryu_round_exact_to_fractional(exact, (unsigned)precision, &rounded)) {
+  if (!ryu_round_exact_to_fractional(exact, (unsigned)precision, &rounded,
+                                      rounding_mode, negative)) {
     return RYU_UNSUPPORTED;
   }
 
@@ -295,6 +299,7 @@ static ryu_status ryu_printf_g(
     int alternate_form,
     int always_sign,
     int space_sign,
+    int rounding_mode,
     size_t* out_len) {
   ryu_bigint rounded_sig;
   int exp10 = 0;
@@ -313,7 +318,8 @@ static ryu_status ryu_printf_g(
     ryu_bigint_from_u64(&rounded_sig, 0u);
     exp10 = 0;
   } else {
-    if (!ryu_round_exact_to_significant(exact, (unsigned)precision, &rounded_sig, &exp10)) {
+    if (!ryu_round_exact_to_significant(exact, (unsigned)precision, &rounded_sig, &exp10,
+                                         rounding_mode, negative)) {
       return RYU_UNSUPPORTED;
     }
   }
@@ -388,6 +394,7 @@ static ryu_status ryu_printf_a(
     int alternate_form,
     int always_sign,
     int space_sign,
+    int rounding_mode,
     size_t* out_len) {
   const char* hex = uppercase
       ? "0123456789ABCDEF"
@@ -439,14 +446,28 @@ static ryu_status ryu_printf_a(
     } else {
       round_bit = leading & 1;
     }
-    if (discarded > half || (discarded == half && round_bit)) {
-      kept++;
-      if (prec > 0 && kept >= (UINT64_C(1) << (prec * 4))) {
-        leading++;
-        kept = 0u;
-      } else if (prec == 0) {
-        leading++;
-        kept = 0u;
+    {
+      int should_round_up;
+      switch (rounding_mode) {
+      case RYU_ROUND_TOWARD_ZERO:
+        should_round_up = 0; break;
+      case RYU_ROUND_TOWARD_POS:
+        should_round_up = !sign && discarded > 0u; break;
+      case RYU_ROUND_TOWARD_NEG:
+        should_round_up = sign && discarded > 0u; break;
+      default: /* NEAREST_EVEN */
+        should_round_up = discarded > half || (discarded == half && round_bit);
+        break;
+      }
+      if (should_round_up) {
+        kept++;
+        if (prec > 0 && kept >= (UINT64_C(1) << (prec * 4))) {
+          leading++;
+          kept = 0u;
+        } else if (prec == 0) {
+          leading++;
+          kept = 0u;
+        }
       }
     }
     frac = kept;
@@ -606,7 +627,8 @@ ryu_status ryu64_to_printf(
     return ryu_printf_a(
         out, out_cap, abs_bits, fp.sign,
         spec->precision, spec->uppercase, spec->alternate_form,
-        spec->always_sign, spec->space_sign, out_len);
+        spec->always_sign, spec->space_sign, spec->rounding_mode,
+        out_len);
   }
 
   if (!ryu_exact_decimal_from_bits(abs_bits, &exact)) {
@@ -624,6 +646,7 @@ ryu_status ryu64_to_printf(
           spec->alternate_form,
           spec->always_sign,
           spec->space_sign,
+          spec->rounding_mode,
           out_len);
     case RYU_FMT_E:
       return ryu_printf_e(
@@ -636,6 +659,7 @@ ryu_status ryu64_to_printf(
           spec->alternate_form,
           spec->always_sign,
           spec->space_sign,
+          spec->rounding_mode,
           out_len);
     case RYU_FMT_G:
       return ryu_printf_g(
@@ -648,6 +672,7 @@ ryu_status ryu64_to_printf(
           spec->alternate_form,
           spec->always_sign,
           spec->space_sign,
+          spec->rounding_mode,
           out_len);
     default:
       return RYU_INVALID;

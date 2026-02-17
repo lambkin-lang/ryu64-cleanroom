@@ -72,6 +72,7 @@ int main(void) {
   spec.alternate_form = 0;
   spec.always_sign = 0;
   spec.space_sign = 0;
+  spec.rounding_mode = 0;
   if (ryu64_to_printf(out, sizeof(out), 1.0, &spec, &out_len) != RYU_OK || out_len == 0u) {
     return 5;
   }
@@ -770,6 +771,7 @@ static int run_printf_diff(unsigned iters) {
           spec.alternate_form = 0;
           spec.always_sign = 0;
           spec.space_sign = 0;
+          spec.rounding_mode = 0;
 
           if (ryu64_to_printf(out_ryu, sizeof(out_ryu), x, &spec, &out_len) != RYU_OK) {
             fprintf(stderr, "ryu printf failed bits=0x%016llx\n", (unsigned long long)bits);
@@ -1335,6 +1337,7 @@ static int run_bankers_rounding_via_printf(void) {
     spec.alternate_form = 0;
     spec.always_sign = 0;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
 
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), cases[i].value, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "bankers_rounding[%zu]: ryu64_to_printf failed for %.17g kind=%d prec=%d\n",
@@ -1469,6 +1472,7 @@ static int run_subnormal_formatting(void) {
       spec.alternate_form = 0;
       spec.always_sign = 0;
       spec.space_sign = 0;
+    spec.rounding_mode = 0;
       if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), x, &spec, &out_len) != RYU_OK) {
         fprintf(stderr, "subnormal_fmt[%zu]: printf %%e failed for bits=0x%016llx\n",
                 i, (unsigned long long)subnormal_bits[i]);
@@ -1503,6 +1507,7 @@ static int run_printf_edge_cases(void) {
       spec.alternate_form = 0;
       spec.always_sign = 0;
       spec.space_sign = 0;
+    spec.rounding_mode = 0;
       if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), e0_values[i], &spec, &ryu_len) != RYU_OK) {
         fprintf(stderr, "printf_edge %%e prec=0: failed for %.17g\n", e0_values[i]);
         return 0;
@@ -1524,6 +1529,7 @@ static int run_printf_edge_cases(void) {
     spec.alternate_form = 0;
     spec.always_sign = 0;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
 
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), 1.0, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "printf_edge %%g: failed for 1.0\n");
@@ -1554,6 +1560,7 @@ static int run_printf_edge_cases(void) {
     spec.alternate_form = 1;
     spec.always_sign = 0;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
 
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), 1.0, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "printf_edge %%#g: failed for 1.0\n");
@@ -1574,6 +1581,7 @@ static int run_printf_edge_cases(void) {
     spec.alternate_form = 1;
     spec.always_sign = 0;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
 
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), 1.0, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "printf_edge %%#.0f: failed for 1.0\n");
@@ -1596,6 +1604,7 @@ static int run_printf_edge_cases(void) {
     spec.alternate_form = 0;
     spec.always_sign = 0;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), neg_zero, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "printf_edge -0 %%f: failed\n");
       return 0;
@@ -1627,6 +1636,7 @@ static int run_printf_edge_cases(void) {
     spec.alternate_form = 0;
     spec.always_sign = 1;
     spec.space_sign = 0;
+    spec.rounding_mode = 0;
     if (ryu64_to_printf(ryu_buf, sizeof(ryu_buf), 1.0, &spec, &ryu_len) != RYU_OK) {
       fprintf(stderr, "printf_edge +sign: failed\n");
       return 0;
@@ -2266,6 +2276,7 @@ static int run_buffer_too_small(void) {
     pspec.alternate_form = 0;
     pspec.always_sign = 0;
     pspec.space_sign = 0;
+    pspec.rounding_mode = 0;
 
     st = ryu64_to_printf(big, sizeof(big), 1.0, &pspec, &out_len);
     if (st != RYU_OK) {
@@ -2286,6 +2297,136 @@ static int run_buffer_too_small(void) {
   if (st != RYU_BUFFER_TOO_SMALL) {
     fprintf(stderr, "buf_too_small: shortest(NULL,0) should return BUFFER_TOO_SMALL, got %d\n",
             (int)st);
+    return 0;
+  }
+
+  return 1;
+}
+
+static int run_rounding_modes(void) {
+  char buf[64];
+  size_t len;
+  ryu_printf_spec spec;
+
+  spec.kind = RYU_FMT_F;
+  spec.uppercase = 0;
+  spec.alternate_form = 0;
+  spec.always_sign = 0;
+  spec.space_sign = 0;
+  spec.rounding_mode = 0;
+
+  /*
+   * %.1f of 2.25 — exact in binary (2 + 1/4).
+   * Nearest-even: 2.2 (tie, 2 is even → keep).
+   * Toward-zero: 2.2 (truncate).
+   * Toward-pos: 2.3 (positive, discard nonzero → round up).
+   * Toward-neg: 2.2 (positive, truncate toward -inf).
+   */
+  spec.precision = 1;
+
+  spec.rounding_mode = RYU_ROUND_NEAREST_EVEN;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.25, &spec, &len) != RYU_OK ||
+      len != 3 || buf[0] != '2' || buf[1] != '.' || buf[2] != '2') {
+    fprintf(stderr, "rounding_modes: nearest-even 2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_ZERO;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.25, &spec, &len) != RYU_OK ||
+      len != 3 || buf[0] != '2' || buf[1] != '.' || buf[2] != '2') {
+    fprintf(stderr, "rounding_modes: toward-zero 2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_POS;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.25, &spec, &len) != RYU_OK ||
+      len != 3 || buf[0] != '2' || buf[1] != '.' || buf[2] != '3') {
+    fprintf(stderr, "rounding_modes: toward-pos 2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_NEG;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.25, &spec, &len) != RYU_OK ||
+      len != 3 || buf[0] != '2' || buf[1] != '.' || buf[2] != '2') {
+    fprintf(stderr, "rounding_modes: toward-neg 2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  /*
+   * %.1f of -2.25 — negative.
+   * Nearest-even: -2.2 (tie, 2 is even → keep).
+   * Toward-zero: -2.2 (truncate magnitude).
+   * Toward-pos: -2.2 (negative, truncate toward +inf = truncate magnitude).
+   * Toward-neg: -2.3 (negative, round magnitude up toward -inf).
+   */
+  spec.rounding_mode = RYU_ROUND_NEAREST_EVEN;
+  if (ryu64_to_printf(buf, sizeof(buf), -2.25, &spec, &len) != RYU_OK ||
+      len != 4 || buf[0] != '-' || buf[1] != '2' || buf[2] != '.' || buf[3] != '2') {
+    fprintf(stderr, "rounding_modes: nearest-even -2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_POS;
+  if (ryu64_to_printf(buf, sizeof(buf), -2.25, &spec, &len) != RYU_OK ||
+      len != 4 || buf[0] != '-' || buf[1] != '2' || buf[2] != '.' || buf[3] != '2') {
+    fprintf(stderr, "rounding_modes: toward-pos -2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_NEG;
+  if (ryu64_to_printf(buf, sizeof(buf), -2.25, &spec, &len) != RYU_OK ||
+      len != 4 || buf[0] != '-' || buf[1] != '2' || buf[2] != '.' || buf[3] != '3') {
+    fprintf(stderr, "rounding_modes: toward-neg -2.25 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  /*
+   * %.0f of 2.5 — exact tie.
+   * Nearest-even: 2 (tie, 2 is even → keep).
+   * Toward-zero: 2 (truncate).
+   * Toward-pos: 3 (positive, round up).
+   * Toward-neg: 2 (positive, truncate).
+   */
+  spec.precision = 0;
+
+  spec.rounding_mode = RYU_ROUND_NEAREST_EVEN;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.5, &spec, &len) != RYU_OK ||
+      len != 1 || buf[0] != '2') {
+    fprintf(stderr, "rounding_modes: nearest-even 2.5 prec=0 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_POS;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.5, &spec, &len) != RYU_OK ||
+      len != 1 || buf[0] != '3') {
+    fprintf(stderr, "rounding_modes: toward-pos 2.5 prec=0 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_ZERO;
+  if (ryu64_to_printf(buf, sizeof(buf), 2.5, &spec, &len) != RYU_OK ||
+      len != 1 || buf[0] != '2') {
+    fprintf(stderr, "rounding_modes: toward-zero 2.5 prec=0 failed: %.*s\n", (int)len, buf);
+    return 0;
+  }
+
+  /*
+   * %.2e of 1.235 — scientific notation.
+   * 1.235 is not exactly representable. As a double it's ~1.2350000000000001.
+   * Nearest-even: 1.24e+00 (round_digit > 0 after exact expansion).
+   * Toward-zero: 1.23e+00 (truncate).
+   */
+  spec.kind = RYU_FMT_E;
+  spec.precision = 2;
+
+  spec.rounding_mode = RYU_ROUND_TOWARD_ZERO;
+  if (ryu64_to_printf(buf, sizeof(buf), 1.235, &spec, &len) != RYU_OK) {
+    fprintf(stderr, "rounding_modes: toward-zero 1.235 %%e failed\n");
+    return 0;
+  }
+  /* Should truncate to "1.23e+00" */
+  if (len < 4 || buf[0] != '1' || buf[1] != '.' || buf[2] != '2' || buf[3] != '3') {
+    fprintf(stderr, "rounding_modes: toward-zero 1.235 %%e got: %.*s\n", (int)len, buf);
     return 0;
   }
 
@@ -2315,6 +2456,9 @@ int main(void) {
     return 1;
   }
   if (!run_buffer_too_small()) {
+    return 1;
+  }
+  if (!run_rounding_modes()) {
     return 1;
   }
 

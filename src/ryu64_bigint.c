@@ -1286,7 +1286,9 @@ int ryu_format_scientific_fixed_sig(
 static int ryu_round_integer_div_pow10(
     const ryu_bigint* value,
     unsigned drop,
-    ryu_bigint* rounded) {
+    ryu_bigint* rounded,
+    int rounding_mode,
+    int negative) {
   unsigned q_digits = drop / 9u;
   unsigned r = drop % 9u;
   uint32_t round_digit = 0u;
@@ -1319,9 +1321,23 @@ static int ryu_round_integer_div_pow10(
         }
       }
     }
-    if (round_digit > 5u || (round_digit == 5u && tail_nonzero)) {
-      if (!ryu_bigint_add_small(rounded, 1u)) {
-        return 0;
+    {
+      int should_round_up;
+      switch (rounding_mode) {
+      case RYU_ROUND_TOWARD_ZERO:
+        should_round_up = 0; break;
+      case RYU_ROUND_TOWARD_POS:
+        should_round_up = !negative && (round_digit > 0u || tail_nonzero); break;
+      case RYU_ROUND_TOWARD_NEG:
+        should_round_up = negative && (round_digit > 0u || tail_nonzero); break;
+      default: /* NEAREST_EVEN */
+        should_round_up = round_digit > 5u || (round_digit == 5u && tail_nonzero);
+        break;
+      }
+      if (should_round_up) {
+        if (!ryu_bigint_add_small(rounded, 1u)) {
+          return 0;
+        }
       }
     }
     return 1;
@@ -1361,10 +1377,24 @@ static int ryu_round_integer_div_pow10(
 
   ryu_bigint_normalize(rounded);
 
-  if (round_digit > 5u ||
-      (round_digit == 5u && (tail_nonzero || ((rounded->limb[0] & 1u) != 0u)))) {
-    if (!ryu_bigint_add_small(rounded, 1u)) {
-      return 0;
+  {
+    int should_round_up;
+    switch (rounding_mode) {
+    case RYU_ROUND_TOWARD_ZERO:
+      should_round_up = 0; break;
+    case RYU_ROUND_TOWARD_POS:
+      should_round_up = !negative && (round_digit > 0u || tail_nonzero); break;
+    case RYU_ROUND_TOWARD_NEG:
+      should_round_up = negative && (round_digit > 0u || tail_nonzero); break;
+    default: /* NEAREST_EVEN */
+      should_round_up = round_digit > 5u ||
+          (round_digit == 5u && (tail_nonzero || ((rounded->limb[0] & 1u) != 0u)));
+      break;
+    }
+    if (should_round_up) {
+      if (!ryu_bigint_add_small(rounded, 1u)) {
+        return 0;
+      }
     }
   }
   return 1;
@@ -1374,7 +1404,9 @@ int ryu_round_exact_to_significant(
     const ryu_decimal_exact* exact,
     unsigned sig_digits,
     ryu_bigint* out_rounded,
-    int* out_exp10) {
+    int* out_exp10,
+    int rounding_mode,
+    int negative) {
   unsigned len;
   int exp10;
   if (sig_digits == 0u) {
@@ -1391,7 +1423,8 @@ int ryu_round_exact_to_significant(
 
   if (len > sig_digits) {
     unsigned drop = len - sig_digits;
-    if (!ryu_round_integer_div_pow10(&exact->digits, drop, out_rounded)) {
+    if (!ryu_round_integer_div_pow10(&exact->digits, drop, out_rounded,
+                                      rounding_mode, negative)) {
       return 0;
     }
   } else {
@@ -1418,12 +1451,15 @@ int ryu_round_exact_to_significant(
 int ryu_round_exact_to_fractional(
     const ryu_decimal_exact* exact,
     unsigned frac_digits,
-    ryu_bigint* out_rounded) {
+    ryu_bigint* out_rounded,
+    int rounding_mode,
+    int negative) {
   if (exact->scale <= frac_digits) {
     ryu_bigint_copy(out_rounded, &exact->digits);
     return ryu_bigint_mul_pow10(out_rounded, frac_digits - exact->scale);
   }
-  return ryu_round_integer_div_pow10(&exact->digits, exact->scale - frac_digits, out_rounded);
+  return ryu_round_integer_div_pow10(&exact->digits, exact->scale - frac_digits,
+                                      out_rounded, rounding_mode, negative);
 }
 
 int ryu_emit_fixed_from_scaled(

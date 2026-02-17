@@ -706,6 +706,7 @@ static int run_printf_oracle(const u64_vec* ds, int quick, oracle_stats* stats) 
               spec.alternate_form = alt;
               spec.always_sign = (sign_mode == 1);
               spec.space_sign = (sign_mode == 2);
+              spec.rounding_mode = 0;
 
               st = ryu64_to_printf(got, sizeof(got), x, &spec, &got_len);
               stats->cases += 1u;
@@ -791,6 +792,7 @@ static int run_printf_nan_policy(oracle_stats* stats) {
               spec.alternate_form = alt;
               spec.always_sign = (sign_mode == 1);
               spec.space_sign = (sign_mode == 2);
+              spec.rounding_mode = 0;
 
               st = ryu64_to_printf(got, sizeof(got), x, &spec, &got_len);
               stats->cases += 1u;
@@ -1045,6 +1047,7 @@ static int run_scan_oracle_from_formats(const u64_vec* ds, int quick, oracle_sta
           spec.alternate_form = 0;
           spec.always_sign = 0;
           spec.space_sign = 0;
+          spec.rounding_mode = 0;
 
           if (!oracle_format_text(text, sizeof(text), x, &spec)) {
             continue;
